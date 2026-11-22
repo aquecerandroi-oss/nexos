@@ -1,0 +1,22 @@
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+
+# Nada disto pode ir para o repositório: ele é público e o site serve a pasta inteira.
+# Backups baixados pelo sistema (têm clientes, vendas e financeiro)
+nexos-backup-*.json
+backups/
+*.bak
+# Chaves e arquivos locais de ferramentas
+.env
+.env.*
+supabase/.temp/
+supabase/.branches/
+.claude/
+.vscode/
+# Arquivos de trabalho que não fazem parte do site
+*.zip
+*.stl
+*.3mf
+*.gcode
