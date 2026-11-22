@@ -3,31 +3,34 @@
 
 /* ---------- Telas de entrada ---------- */
 function telaAuth(conteudo) {
+  if (typeof visFecharAbertura === 'function') visFecharAbertura();
   const card = $('.auth .auth-card');
-  if (card) { card.innerHTML = conteudo; return; }          // mantém a imagem e o vídeo; troca só o cartão
+  if (card) { card.innerHTML = conteudo; return; }          // mantém a logo animada; troca só o cartão
   $('#app').innerHTML = `<div class="auth">
     <div class="auth-hero">
-      <video class="auth-video" muted loop playsinline preload="none" poster="img/hero.jpg" aria-hidden="true" tabindex="-1"><source src="img/hero.mp4" type="video/mp4"></video>
+      <video class="auth-video" muted loop playsinline preload="none" poster="img/logo-hero.jpg" aria-hidden="true" tabindex="-1"><source src="img/logo-loop.mp4" type="video/mp4"></video>
       <div class="auth-hero-in">
-        <div class="logo xl">NE<b>X</b>OS</div>
         <p>Produção 3D sob controle: custo real de cada peça, fila da impressora, estoque e lucro por canal.</p>
         <ul><li>Custo e preço por canal</li><li>Fila com previsão</li><li>Estoque e compras</li><li>Financeiro e metas</li></ul>
       </div></div>
     <div class="auth-painel"><div class="auth-card">${conteudo}</div></div></div>`;
-  // o vídeo só carrega em telas largas (onde a imagem lateral aparece) e se a pessoa não pediu menos movimento
-  const v = $('.auth-video'), hero = $('.auth-hero');
+  // a logo animada (vídeo leve, em loop) só roda se a pessoa não pediu menos movimento; sem ela fica a imagem parada
+  const v = $('.auth-video');
   const semMovimento = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (v && hero && getComputedStyle(hero).display !== 'none' && !semMovimento) {
+  if (v && !semMovimento) {
     v.addEventListener('playing', () => v.classList.add('on'), { once: true });
     const p = v.play();
     if (p && p.catch) p.catch(() => {});
   }
 }
-const telaCarregando = (msg = 'Carregando…') => telaAuth(`<div class="carregando"><span class="spin"></span>${esc(msg)}</div>`);
+/* Enquanto entra e carrega: a tela de abertura com a logo (visual.js); sem ela, um cartão simples. */
+const telaCarregando = (msg = 'Carregando…') => {
+  if (typeof visAbertura === 'function') return visAbertura(msg);
+  telaAuth(`<div class="carregando"><span class="spin"></span>${esc(msg)}</div>`);
+};
 function telaLogin(aba = 'entrar', msg = '', email = '', ok = false) {
   const entrar = aba === 'entrar';
   telaAuth(`
-    <div class="auth-marca"><img src="img/icon.svg" alt=""><div class="logo">NE<b>X</b>OS</div></div>
     <div class="auth-titulo">${entrar ? 'Entrar no sistema' : 'Criar conta ou nova senha'}</div>
     <div class="auth-sub">${entrar ? 'Use o e-mail e a senha da sua conta.' : 'Para criar a conta você precisa de um código: o de primeiro acesso (primeira conta do sistema) ou o do convite que recebeu.'}</div>
     <div class="tabs"><button type="button" class="${entrar ? 'on' : ''}" onclick="telaLogin('entrar')">Entrar</button><button type="button" class="${entrar ? '' : 'on'}" onclick="telaLogin('criar')">Criar conta</button></div>
@@ -117,8 +120,7 @@ async function aposLogin(session) {
   await iniciarApp();
 }
 function telaSemAcesso(email) {
-  telaAuth(`<div class="auth-marca"><img src="img/icon.svg" alt=""><div class="logo">NE<b>X</b>OS</div></div>
-    <div class="auth-titulo">Acesso ainda não liberado</div>
+  telaAuth(`<div class="auth-titulo">Acesso ainda não liberado</div>
     <p class="auth-sub">A conta <b>${esc(email)}</b> não faz parte da equipe. Peça a quem administra o sistema para convidar este e-mail em Perfil → Equipe e tente de novo.</p>
     <button class="btn largo" onclick="location.reload()">Tentar de novo</button>
     <button class="btn ghost largo" onclick="sair()">Sair</button>`);
@@ -133,6 +135,8 @@ async function iniciarApp() {
   montarEstrutura();
   if (DEMO) $('#app').insertAdjacentHTML('beforebegin', '<div class="demo-faixa">MODO DEMONSTRAÇÃO — os dados ficam só neste navegador</div>');
   render();
+  if (typeof visFecharAbertura === 'function') visFecharAbertura();
+  if (typeof shopeeAoEntrar === 'function') shopeeAoEntrar();             // volta da autorização da loja na Shopee
   DB.assinar(aplicarRemoto, recarregar);
   carregarEquipe();
 }

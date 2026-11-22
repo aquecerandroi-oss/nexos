@@ -1,15 +1,16 @@
 'use strict';
 /* Nexos — telas de Operação: Painel, Produção, Falhas e Manutenção.
    Tudo que é global neste arquivo começa com "op". Outros arquivos podem chamar
-   opNovaOrdem(produtoId, clienteId) e opNovaFalha(produtoId, filamentoId).
+   opNovaOrdem(produtoId, clienteId, qtd) e opNovaFalha(produtoId, filamentoId).
    As contas ficam em calc.js; aqui só se monta a tela e se chama a regra certa. */
 
 /* ---------- Ajudantes desta área ---------- */
 /* opPl(3, 'peça', 'peças') devolve "3 peças". */
 const opPl = (n, um, varios) => nf(n) + ' ' + (Math.round(num(n)) === 1 ? um : varios);
-/* Botão pequeno de linha. O id vai em data-id e é lido com this.dataset: nunca entra no código do onclick. */
-const opBtn = (rotulo, fn, id, cls = 'ghost') =>
-  `<button type="button" class="btn ${cls} sm" data-id="${esc(id)}" onclick="${fn}(this.dataset.id)">${rotulo}</button>`;
+/* Botão pequeno de linha. O id vai em data-id e é lido com this.dataset: nunca entra no código do onclick.
+   dica: texto que aparece ao parar o mouse em cima. */
+const opBtn = (rotulo, fn, id, cls = 'ghost', dica = '') =>
+  `<button type="button" class="btn ${cls} sm" data-id="${esc(id)}"${dica ? ` title="${esc(dica)}"` : ''} onclick="${fn}(this.dataset.id)">${rotulo}</button>`;
 const opBtnNovaOrdem = '<button type="button" class="btn" onclick="opNovaOrdem()">+ Nova ordem</button>';
 const opCmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 /* Mais recentes primeiro pelo campo de data; no empate, o que foi lançado por último. */
@@ -41,6 +42,17 @@ const opColNome = ' style="min-width:160px"';
 const opVazioFila = () => (S.produtos.length
   ? vazio('Nenhuma ordem na fila. Crie uma ordem para a impressora começar a trabalhar.', opBtnNovaOrdem)
   : vazio('Para criar ordens de produção, cadastre primeiro um produto.', '<a class="btn" href="#produtos">Cadastrar produto</a>'));
+/* Produtos abaixo do estoque mínimo (lista de sugestoesProducao): "Produzir N× Produto" e o botão que já abre a ordem
+   com a quantidade. max: quantos mostrar (os outros viram uma linha "E mais…"). */
+function opListaSugestoes(lista, max) {
+  const mostrar = max ? lista.slice(0, max) : lista, resto = lista.length - mostrar.length;
+  const itens = mostrar.map(s => `<li>
+      <div style="flex:1;min-width:0"><b>Produzir ${nf(s.falta)}× ${esc(s.p.nome)}</b>
+        <div class="muted txt-sm">tem ${nf(s.estoque)}, mínimo ${nf(s.minimo)}, ${nf(s.emProducao)} em produção</div></div>
+      <button type="button" class="btn ghost sm" data-id="${esc(s.p.id)}" data-qtd="${esc(s.falta)}" onclick="opCriarSugerida(this.dataset.id, this.dataset.qtd)">Criar ordem</button></li>`).join('');
+  return `<ul class="lista">${itens}</ul>${resto > 0 ? `<p class="muted txt-sm mt">E mais ${opPl(resto, 'produto', 'produtos')} abaixo do mínimo.</p>` : ''}`;
+}
+function opCriarSugerida(id, qtd) { opNovaOrdem(id, '', num(qtd)); }
 
 /* ---------- Tela: Painel ---------- */
 /* Painel dentro de .cols: sem isto a tabela não rola de lado no celular e empurra a tela inteira. */
@@ -86,20 +98,57 @@ function opPainelFila(fila) {
   const corpo = fila.length
     ? `<ul class="lista">${itens}</ul>${fila.length > 5 ? `<p class="muted txt-sm mt">E mais ${opPl(fila.length - 5, 'ordem', 'ordens')} na fila.</p>` : ''}`
     : opVazioFila();
-  return `<div class="panel"${opNaGrade}><div class="panel-head"><h2>Fila da impressora</h2><a class="btn ghost sm" href="#producao">Ver produção</a></div>${corpo}</div>`;
+  /* ordens que já saíram da impressora e esperam o acabamento */
+  const acab = ordensEmAcabamento();
+  const emAcab = acab.length
+    ? `<p class="txt-sm mt">${selo('Em acabamento', 'info')} <a href="#producao">${opPl(acab.length, 'ordem', 'ordens')}</a> · ${opPl(soma(acab, 'qtd'), 'peça esperando', 'peças esperando')} para entrar no estoque</p>` : '';
+  return `<div class="panel"${opNaGrade}><div class="panel-head"><h2>Fila da impressora</h2><a class="btn ghost sm" href="#producao">Ver produção</a></div>${corpo}${emAcab}</div>`;
 }
+/* Últimos pedidos: número, data, o que foi vendido, canal, total e lucro (já sem as devoluções). */
 function opPainelVendas() {
   const ultimas = opRecentes(S.vendas).slice(0, 5);
-  const linhas = ultimas.map(v => `<tr>
+  const linhas = ultimas.map(v => {
+    const dev = num(v.devolvido);
+    return `<tr>
+      <td class="num">${v.numero ? esc(v.numero) : '—'}</td>
       <td class="num">${esc(dataBR(v.data))}</td>
-      <td>${nf(v.qtd)}× ${esc((byId('produtos', v.produtoId) || {}).nome || v.produtoNome || 'Produto excluído')}</td>
+      <td style="min-width:140px">${esc(resumoItensVenda(v))}<small>${opPl(v.qtd, 'peça', 'peças')}${dev > 0 ? ' · ' + opPl(dev, 'devolvida', 'devolvidas') : ''}</small></td>
       <td>${esc((byId('canais', v.canalId) || {}).nome || v.canalNome || 'Sem canal')}</td>
       <td class="right num">${brl(v.bruto)}</td>
-      <td class="right num ${num(v.lucro) < 0 ? 'neg' : 'pos'}">${brl(v.lucro)}</td></tr>`).join('');
+      <td class="right num ${num(v.lucro) < 0 ? 'neg' : 'pos'}">${brl(v.lucro)}</td></tr>`;
+  }).join('');
   const corpo = ultimas.length
-    ? tabela(['Data', 'Produto', 'Canal', { t: 'Total', r: 1 }, { t: 'Lucro', r: 1 }], linhas)
+    ? tabela(['Nº', 'Data', 'Pedido', 'Canal', { t: 'Total', r: 1 }, { t: 'Lucro', r: 1 }], linhas)
     : vazio('Nenhuma venda registrada ainda.', '<button type="button" class="btn" onclick="opAbrirVenda()">Registrar venda</button>');
   return `<div class="panel"${opNaGrade}><div class="panel-head"><h2>Últimas vendas</h2><a class="btn ghost sm" href="#vendas">Ver vendas</a></div>${corpo}</div>`;
+}
+function opPainelSugestoes(sug) {
+  return `<div class="panel"${opNaGrade}><div class="panel-head"><h2>Sugestões de produção</h2><a class="btn ghost sm" href="#producao">Ver produção</a></div>${opListaSugestoes(sug, 5)}</div>`;
+}
+/* Contas a pagar vencidas ou que vencem nos próximos 7 dias e contas a receber atrasadas. Sem nenhuma, não aparece. */
+function opPainelContas() {
+  const lim = addDias(hoje(), 7);
+  const entra = c => {
+    if (c.pagoEm) return false;
+    const st = situacaoConta(c);
+    if (c.tipo === 'pagar') return st === 'vencida' || st === 'hoje' || (st === 'aberta' && !!c.vencimento && c.vencimento <= lim);
+    return c.tipo === 'receber' && st === 'vencida';
+  };
+  const lista = (S.contas || []).filter(entra).sort((a, b) => opCmp(String(a.vencimento || ''), String(b.vencimento || '')));
+  if (!lista.length) return '';
+  const pagar = soma(lista.filter(c => c.tipo === 'pagar'), 'valor'), receber = soma(lista.filter(c => c.tipo === 'receber'), 'valor');
+  const resumo = [pagar > 0 ? 'A pagar: ' + brl(pagar) : '', receber > 0 ? 'A receber atrasado: ' + brl(receber) : ''].filter(Boolean).join(' · ');
+  const itens = lista.slice(0, 8).map(c => {
+    const st = situacaoConta(c), aPagar = c.tipo === 'pagar', venc = dataBR(c.vencimento);
+    const marca = !aPagar ? selo('Atrasada', 'warn') : st === 'vencida' ? selo('Vencida', 'bad') : st === 'hoje' ? selo('Vence hoje', 'warn') : selo('Esta semana');
+    const quando = !aPagar ? 'A receber · desde ' + venc : st === 'vencida' ? 'A pagar · venceu ' + venc : st === 'hoje' ? 'A pagar' : 'A pagar · vence ' + venc;
+    const cliente = !aPagar && c.clienteId ? nomeDe('clientes', c.clienteId, '') : '';
+    return `<li>${marca}<div style="flex:1;min-width:0"><a href="#contas">${esc(c.descricao || 'Conta')}</a>
+      <div class="muted txt-sm">${esc(quando)}${cliente ? ' · ' + cliente : ''}</div></div><b class="num${aPagar ? '' : ' pos'}">${brl(c.valor)}</b></li>`;
+  }).join('');
+  const mais = lista.length > 8 ? `<p class="muted txt-sm mt">E mais ${opPl(lista.length - 8, 'conta', 'contas')}.</p>` : '';
+  return `<div class="panel"${opNaGrade}><div class="panel-head"><h2>Contas da semana</h2><a class="btn ghost sm" href="#contas">Ver contas</a></div>
+    ${resumo ? `<p class="muted txt-sm">${resumo}</p>` : ''}<ul class="lista">${itens}</ul>${mais}</div>`;
 }
 /* O formulário de venda mora em views-comercial.js; se ele não estiver carregado, só abre a tela. */
 function opAbrirVenda() {
@@ -108,6 +157,8 @@ function opAbrirVenda() {
 VIEWS.painel = function () {
   const mes = mesAtual(), rv = resumoVendas(vendasDoMes(mes)), fila = filaProducao();
   const prontas = soma(S.produtos, p => Math.max(0, num(p.estoque))), comEstoque = S.produtos.filter(p => num(p.estoque) > 0).length;
+  /* painéis que só aparecem quando há o que mostrar */
+  const sug = sugestoesProducao(), extras = (sug.length ? opPainelSugestoes(sug) : '') + opPainelContas();
   return head('Painel', 'Resumo de ' + nomeMesLongo(mes)) +
     (!S.filamentos.length && !S.produtos.length ? opPainelPassos() : '') +
     `<div class="cards">
@@ -117,7 +168,8 @@ VIEWS.painel = function () {
       ${kpi('Peças prontas', nf(prontas), opPl(comEstoque, 'produto com estoque', 'produtos com estoque'), prontas < 0 ? 'neg' : '')}
     </div>
     <div class="cols">${opPainelMetas(rv)}${opPainelAlertas()}</div>
-    <div class="cols">${opPainelFila(fila)}${opPainelVendas()}</div>`;
+    <div class="cols">${opPainelFila(fila)}${opPainelVendas()}</div>` +
+    (extras ? `<div class="cols">${extras}</div>` : '');
 };
 
 /* ---------- Tela: Produção ---------- */
@@ -132,7 +184,11 @@ function opLinhaFila(x, naFila, destaque) {
   const editarExcluir = opBtn('Editar', 'opEditarOrdem', o.id) + opBtn('Excluir', 'opExcluirOrdem', o.id, 'danger');
   let acoes;
   if (o.status === 'imprimindo') {
-    acoes = `<div class="stack" style="gap:6px"><div class="rowbtns">${opBtn('Concluir', 'opConcluir', o.id, '')}${opBtn('Falhou', 'opFalhou', o.id)}${opBtn('Voltar para a fila', 'opVoltarFila', o.id)}</div><div class="rowbtns">${editarExcluir}</div></div>`;
+    /* produto com acabamento: ao terminar a impressão a ordem vai para "Em acabamento", não para o estoque */
+    const concluir = x.p && x.p.acabamento
+      ? opBtn('Terminou a impressão', 'opConcluir', o.id, '', 'A ordem vai para Em acabamento')
+      : opBtn('Concluir', 'opConcluir', o.id, '');
+    acoes = `<div class="stack" style="gap:6px"><div class="rowbtns">${concluir}${opBtn('Falhou', 'opFalhou', o.id)}${opBtn('Voltar para a fila', 'opVoltarFila', o.id)}</div><div class="rowbtns">${editarExcluir}</div></div>`;
   } else {
     const i = naFila.indexOf(x);
     acoes = `<div class="rowbtns">${opBtn('Iniciar', 'opIniciar', o.id, destaque ? '' : 'ghost')}${opSeta(o, -1, i > 0)}${opSeta(o, 1, i >= 0 && i < naFila.length - 1)}${editarExcluir}</div>`;
@@ -147,25 +203,47 @@ function opLinhaFila(x, naFila, destaque) {
     <td>${acoes}</td></tr>`;
 }
 function opLinhaFeita(o) {
+  /* quem passou pelo acabamento volta para "Em acabamento" ao reabrir; as outras voltam para a fila */
+  const sub = [o.passouAcabamento ? 'Passou pelo acabamento' : '', esc(o.obs)].filter(Boolean).join(' · ');
+  const reabrir = opBtn('Reabrir', 'opReabrir', o.id, 'ghost', o.passouAcabamento ? 'Volta para Em acabamento' : 'Volta para a fila');
   return `<tr>
     <td class="num">${esc(dataBR(o.fim))}</td>
-    <td${opColNome}><b>${opProduto(o.produtoId)}</b>${o.obs ? `<small>${esc(o.obs)}</small>` : ''}</td>
+    <td${opColNome}><b>${opProduto(o.produtoId)}</b>${sub ? `<small>${sub}</small>` : ''}</td>
     <td class="right num">${nf(o.qtd)}</td>
     <td class="right num">${gramas(soma(o.consumo, 'g'))}</td>
     <td class="right num">${brl(num(o.custoUnit) * num(o.qtd))}</td>
     <td>${nomeDe('clientes', o.clienteId)}</td>
-    <td><div class="rowbtns">${opBtn('Reabrir', 'opReabrir', o.id)}${opBtn('Editar', 'opEditarOrdem', o.id)}${opBtn('Excluir', 'opExcluirOrdem', o.id, 'danger')}</div></td></tr>`;
+    <td><div class="rowbtns">${reabrir}${opBtn('Editar', 'opEditarOrdem', o.id)}${opBtn('Excluir', 'opExcluirOrdem', o.id, 'danger')}</div></td></tr>`;
+}
+/* Ordem já impressa esperando o acabamento. destaque: a mais antiga, que deve ficar pronta primeiro. */
+function opLinhaAcabamento(o, destaque) {
+  const p = byId('produtos', o.produtoId), cliente = byId('clientes', o.clienteId);
+  const sub = [p && p.etapasAcabamento ? esc(p.etapasAcabamento) : '', cliente ? esc(cliente.nome) : '', esc(o.obs)].filter(Boolean).join(' · ');
+  return `<tr>
+    <td${opColNome}><b>${opProduto(o.produtoId)}</b>${sub ? `<small>${sub}</small>` : ''}</td>
+    <td class="right num">${nf(o.qtd)}</td>
+    <td class="num">${esc(dataBR(o.fimImpressao)) || '—'}</td>
+    <td>${opPrazo({ o, prazo: statusPrazo(o), estouraPrazo: false })}</td>
+    <td><div class="stack" style="gap:6px"><div class="rowbtns">${opBtn('Acabamento pronto', 'opAcabamentoPronto', o.id, destaque ? '' : 'ghost', 'As peças entram no estoque de prontas')}${opBtn('Peças estragaram', 'opRefazer', o.id, 'ghost', 'O filamento usado vai para Falhas e a ordem volta para a fila')}</div>
+      <div class="rowbtns">${opBtn('Voltar para a fila', 'opVoltarFila', o.id, 'ghost', 'Só para quem marcou "Terminou a impressão" por engano: o material volta para o estoque')}${opBtn('Editar', 'opEditarOrdem', o.id)}${opBtn('Excluir', 'opExcluirOrdem', o.id, 'danger')}</div></div></td></tr>`;
 }
 VIEWS.producao = function () {
   const fila = filaProducao(), naFila = fila.filter(x => x.o.status === 'fila');
+  const acab = ordensEmAcabamento(), sug = sugestoesProducao();
   const feitas = opRecentes(S.ordens.filter(o => o.status === 'concluido'), 'fim');
   const resumo = fila.length ? `${opPl(fila.length, 'ordem', 'ordens')} · termina ${dataHora(Math.max(...fila.map(x => x.fim)))}` : '';
   const proxima = fila.length && fila[0].o.status === 'fila' ? fila[0] : null;   // nada imprimindo: a primeira da fila é a próxima
+  /* o painel de acabamento aparece quando há ordens nele ou algum produto passa por acabamento */
+  const comAcabamento = acab.length > 0 || S.produtos.some(p => p.acabamento);
   return head('Produção', 'A previsão considera a impressora rodando sem parar, uma ordem por vez.', opBtnNovaOrdem) +
+    (sug.length ? `<div class="panel" id="op-sug"><h2>Sugestões de produção <small>${opPl(sug.length, 'produto abaixo', 'produtos abaixo')} do estoque mínimo</small></h2>${opListaSugestoes(sug)}</div>` : '') +
     `<div class="panel" id="op-fila"><h2>Fila da impressora${resumo ? ` <small>${resumo}</small>` : ''}</h2>${fila.length
       ? tabela(['Produto', { t: 'Qtd', r: 1 }, { t: 'Tempo', r: 1 }, 'Situação', 'Previsão de término', 'Prazo', ''], fila.map(x => opLinhaFila(x, naFila, x === proxima)).join(''))
-      : opVazioFila()}</div>
-    <div class="panel" id="op-feitas"><h2>Concluídas${feitas.length > 30 ? ` <small>as 30 mais recentes de ${nf(feitas.length)}</small>` : ''}</h2>${feitas.length
+      : opVazioFila()}</div>` +
+    (comAcabamento ? `<div class="panel" id="op-acab"><h2>Em acabamento${acab.length ? ` <small>${opPl(soma(acab, 'qtd'), 'peça esperando', 'peças esperando')} para entrar no estoque</small>` : ''}</h2>${acab.length
+      ? tabela(['Produto', { t: 'Qtd', r: 1 }, 'Impressa em', 'Prazo', ''], acab.map((o, i) => opLinhaAcabamento(o, i === 0)).join(''))
+      : vazio('Nenhuma ordem em acabamento. Quando a impressão de um produto com acabamento termina, a ordem fica aqui até o acabamento ficar pronto.')}</div>` : '') +
+    `<div class="panel" id="op-feitas"><h2>Concluídas${feitas.length > 30 ? ` <small>as 30 mais recentes de ${nf(feitas.length)}</small>` : ''}</h2>${feitas.length
       ? tabela(['Data', 'Produto', { t: 'Qtd', r: 1 }, { t: 'Filamento usado', r: 1 }, { t: 'Custo', r: 1 }, 'Cliente', ''], feitas.slice(0, 30).map(o => opLinhaFeita(o)).join(''))
       : vazio('Nenhuma ordem concluída ainda. Quando a impressão terminar, clique em Concluir para as peças entrarem no estoque.')}</div>`;
 };
@@ -180,14 +258,38 @@ function opIniciar(id) {
   opRender();
   toast('Impressão iniciada: ' + opOrdemTxt(o) + '.');
 }
+/* Fim da impressão. Produto com acabamento: a ordem vai para "Em acabamento"; os outros: as peças entram no estoque. */
 function opConcluir(id) {
   const o = byId('ordens', id);
-  if (!o || o.status === 'concluido') return render();
+  if (!o || !ORDEM_ATIVA(o)) return render();      // já impressa (em outro aparelho, por exemplo): só redesenha
   const temProduto = !!byId('produtos', o.produtoId);
   concluirOrdem(o);
   opRender();
   if (!temProduto) return toast('Ordem concluída. O produto foi excluído, por isso o estoque não mudou.');
-  toast(`${opPl(o.qtd, 'peça entrou', 'peças entraram')} no estoque de prontas. Filamento usado: ${gramas(soma(o.consumo, 'g'))}.`);
+  const usado = gramas(soma(o.consumo, 'g'));
+  if (o.status === 'acabamento') return toast(`Impressão terminada: a ordem foi para Em acabamento. Filamento usado: ${usado}.`);
+  toast(`${opPl(o.qtd, 'peça entrou', 'peças entraram')} no estoque de prontas. Filamento usado: ${usado}.`);
+}
+/* Acabamento terminado: as peças entram no estoque de prontas (o material já tinha saído no fim da impressão). */
+function opAcabamentoPronto(id) {
+  const o = byId('ordens', id);
+  if (!o || o.status !== 'acabamento') return render();
+  const temProduto = !!byId('produtos', o.produtoId);
+  concluirOrdem(o);
+  opRender();
+  if (!temProduto) return toast('Acabamento pronto. O produto foi excluído, por isso o estoque não mudou.');
+  toast(`Acabamento pronto: ${opPl(o.qtd, 'peça entrou', 'peças entraram')} no estoque de prontas.`);
+}
+/* Peças que estragaram no acabamento (na pintura, na colagem…): o filamento gasto entra em Falhas, as horas de máquina
+   continuam contando e a ordem volta para a fila para imprimir de novo. */
+function opRefazer(id) {
+  const o = byId('ordens', id);
+  if (!o || o.status !== 'acabamento') return render();
+  const g = soma(o.consumo, 'g');
+  if (!confirmar(`As peças de ${opOrdemTxt(o)} estragaram no acabamento?\n\nO filamento usado (${gramas(g)}) continua gasto e entra em Falhas; as horas de impressão continuam no horímetro. A embalagem e os outros insumos voltam para o estoque.\n\nA ordem volta para a fila para imprimir de novo.`)) return;
+  refazerOrdem(o);
+  opRender();
+  toast(`Registrado: ${gramas(g)} de filamento foram para Falhas e a ordem voltou para a fila.`);
 }
 /* Abre o registro de falha já com o produto e o primeiro filamento dele; a ordem continua como está. */
 function opFalhou(id) {
@@ -196,9 +298,17 @@ function opFalhou(id) {
   const p = byId('produtos', o.produtoId), m = p && (p.materiais || [])[0];
   opNovaFalha(o.produtoId, m ? m.filamentoId : '');
 }
+/* Imprimindo: volta para a fila na hora. Em acabamento: pergunta antes, porque o material volta para o estoque
+   e a ordem precisa ser impressa de novo. */
 function opVoltarFila(id) {
   const o = byId('ordens', id);
-  if (!o || o.status !== 'imprimindo') return render();
+  if (!o || (o.status !== 'imprimindo' && o.status !== 'acabamento')) return render();
+  if (o.status === 'acabamento') {
+    if (!confirmar(`Voltar a ordem de ${opOrdemTxt(o)} para a fila?\n\nUse só se marcou "Terminou a impressão" por engano. Se as peças estragaram, use "Peças estragaram".\n\n${opAvisoDesfazer(o)}\n\nA ordem vai precisar ser impressa de novo.`)) return;
+    reabrirOrdem(o, 'fila');
+    opRender();
+    return toast('A ordem voltou para a fila e o material voltou para o estoque.');
+  }
   reabrirOrdem(o, 'fila');
   opRender();
   toast('A ordem voltou para a fila.');
@@ -212,16 +322,29 @@ function opMover(id, dir) {
   const alvo = botoes.find(b => Number(b.dataset.mover) === dir) || botoes[0];
   if (alvo) alvo.focus();
 }
-/* Aviso comum a reabrir e a excluir uma ordem já concluída. */
-function opAvisoDesfazer(o) {
+/* Aviso de estoque negativo quando as peças da ordem saem do estoque de prontas. */
+function opAvisoNegativo(o) {
   const p = byId('produtos', o.produtoId), q = num(o.qtd);
-  let t = `O material usado volta para o estoque e ${q === 1 ? 'a peça sai' : 'as ' + nf(q) + ' peças saem'} do estoque de prontas.`;
-  if (p && num(p.estoque) < q) t += `\n\nAtenção: hoje há ${opPl(p.estoque, 'peça pronta', 'peças prontas')} deste produto, então o estoque vai ficar negativo.`;
-  return t;
+  return p && num(p.estoque) < q ? `\n\nAtenção: hoje há ${opPl(p.estoque, 'peça pronta', 'peças prontas')} deste produto, então o estoque vai ficar negativo.` : '';
+}
+/* Aviso comum a reabrir e a excluir uma ordem já impressa (concluída ou em acabamento). */
+function opAvisoDesfazer(o) {
+  if (o.status === 'acabamento') return 'O material usado volta para o estoque. As peças ainda não tinham entrado no estoque de prontas.';
+  const q = num(o.qtd);
+  return `O material usado volta para o estoque e ${q === 1 ? 'a peça sai' : 'as ' + nf(q) + ' peças saem'} do estoque de prontas.` + opAvisoNegativo(o);
 }
 function opReabrir(id) {
   const o = byId('ordens', id);
   if (!o || o.status !== 'concluido') return render();
+  if (o.passouAcabamento) {
+    /* volta para o acabamento: as peças saem do estoque de prontas e o material continua usado */
+    const q = num(o.qtd);
+    const t = `${q === 1 ? 'A peça sai' : 'As ' + nf(q) + ' peças saem'} do estoque de prontas. O material continua usado.` + opAvisoNegativo(o);
+    if (!confirmar(`Reabrir a ordem de ${opOrdemTxt(o)}?\n\n${t}\n\nA ordem volta para Em acabamento.`)) return;
+    reabrirOrdem(o, 'acabamento');
+    opRender();
+    return toast('Ordem reaberta. Ela voltou para Em acabamento.');
+  }
   if (!confirmar(`Reabrir a ordem de ${opOrdemTxt(o)}?\n\n${opAvisoDesfazer(o)}\n\nA ordem volta para a fila.`)) return;
   reabrirOrdem(o, 'fila');
   opRender();
@@ -232,21 +355,23 @@ function opExcluirOrdem(id) {
   if (!o) return render();
   const msg = o.status === 'concluido'
     ? `Excluir a ordem concluída de ${opOrdemTxt(o)}?\n\n${opAvisoDesfazer(o)}`
-    : `Excluir a ordem de ${opOrdemTxt(o)}?`;
+    : o.status === 'acabamento'
+      ? `Excluir a ordem em acabamento de ${opOrdemTxt(o)}?\n\n${opAvisoDesfazer(o)}`
+      : `Excluir a ordem de ${opOrdemTxt(o)}?`;
   if (!confirmar(msg)) return;
   excluirOrdem(o);
   opRender();
   toast('Ordem excluída.');
 }
 
-/* Formulário de ordem (nova ou edição) */
-function opNovaOrdem(produtoId, clienteId) { opFormOrdem(null, produtoId, clienteId); }
+/* Formulário de ordem (nova ou edição). qtd (opcional): quantidade que já vem preenchida (ex.: sugestão de produção). */
+function opNovaOrdem(produtoId, clienteId, qtd) { opFormOrdem(null, produtoId, clienteId, qtd); }
 function opEditarOrdem(id) {
   const o = byId('ordens', id);
   if (!o) { toast('Esta ordem não existe mais.', 'bad'); return render(); }
   opFormOrdem(o);
 }
-function opFormOrdem(o, produtoId, clienteId) {
+function opFormOrdem(o, produtoId, clienteId, qtd) {
   if (!o && !S.produtos.length) { toast('Cadastre um produto primeiro.'); ir('produtos'); return; }
   const produtos = opPorNome(S.produtos), optsProd = produtos.map(p => [p.id, p.nome]);
   if (o && !byId('produtos', o.produtoId)) optsProd.unshift([o.produtoId || '', 'Produto excluído']);
@@ -254,10 +379,11 @@ function opFormOrdem(o, produtoId, clienteId) {
   const prodIni = byId('produtos', produtoId) ? produtoId : produtos.length === 1 ? produtos[0].id : '';
   if (!o && !prodIni) optsProd.unshift(['', '— escolha o produto —']);
   const optsCli = [['', '— sem cliente —']].concat(opPorNome(S.clientes).map(c => [c.id, c.nome]));
-  const concluida = !!o && o.status === 'concluido', id = o ? o.id : '';
-  /* O que esta ordem já tirou do estoque (se concluída) volta quando ela é refeita ao salvar. */
+  /* Ordem já impressa (concluída ou em acabamento): o material já saiu do estoque. */
+  const impressa = !!o && ORDEM_IMPRESSA(o), id = o ? o.id : '';
+  /* O que esta ordem já tirou do estoque (se já impressa) volta quando ela é refeita ao salvar. */
   const jaBaixado = { fil: new Map(), ins: new Map() };
-  if (concluida) {
+  if (impressa) {
     (o.consumo || []).forEach(x => jaBaixado.fil.set(x.filamentoId, num(jaBaixado.fil.get(x.filamentoId)) + num(x.g)));
     (o.insumosUsados || []).forEach(x => jaBaixado.ins.set(x.insumoId, num(jaBaixado.ins.get(x.insumoId)) + num(x.qtd)));
   }
@@ -273,8 +399,8 @@ function opFormOrdem(o, produtoId, clienteId) {
     ],
     vals: o
       ? { produtoId: o.produtoId, qtd: o.qtd, data: o.data, prazo: o.prazo, clienteId: o.clienteId, obs: o.obs }
-      : { produtoId: prodIni, qtd: 1, data: hoje(), prazo: '', clienteId: byId('clientes', clienteId) ? clienteId : '', obs: '' },
-    preview: d => opPreviaOrdem(d, jaBaixado, concluida),
+      : { produtoId: prodIni, qtd: Math.max(1, Math.round(num(qtd))), data: hoje(), prazo: '', clienteId: byId('clientes', clienteId) ? clienteId : '', obs: '' },
+    preview: d => opPreviaOrdem(d, jaBaixado, impressa ? o.status : ''),
     save: d => {
       const atual = id ? byId('ordens', id) : null;
       if (id && !atual) { toast('Esta ordem não existe mais.', 'bad'); return; }
@@ -286,17 +412,20 @@ function opFormOrdem(o, produtoId, clienteId) {
         toast('Ordem criada. Ela entrou no fim da fila.');
         return;
       }
-      const refaz = atual.status === 'concluido' && (d.produtoId !== atual.produtoId || d.qtd !== num(atual.qtd));
+      const antes = atual.status;
+      const refaz = ORDEM_IMPRESSA(atual) && (d.produtoId !== atual.produtoId || d.qtd !== num(atual.qtd));
       if (editarOrdem(atual, d) === false) {
         toast('O produto desta ordem foi excluído, então a baixa de estoque não pode ser refeita. Mantenha a quantidade ou escolha outro produto.', 'bad');
         return false;
       }
-      toast(refaz ? 'Ordem atualizada. A baixa de estoque foi refeita.' : 'Ordem atualizada.');
+      /* ordem em acabamento trocada para um produto sem acabamento: as peças vão direto para o estoque */
+      const direto = refaz && antes === 'acabamento' && atual.status === 'concluido';
+      toast(refaz ? 'Ordem atualizada. A baixa de estoque foi refeita.' + (direto ? ' Como este produto não passa por acabamento, as peças entraram no estoque.' : '') : 'Ordem atualizada.');
     },
   });
 }
 /* O que a ordem precisa de cada material, comparado com o estoque. jaBaixado: o que esta mesma ordem
-   já tirou do estoque (quando está concluída) e que volta se ela for refeita. */
+   já tirou do estoque (quando já foi impressa) e que volta se ela for refeita. */
 function opNecessidade(p, qtd, jaBaixado) {
   const fils = new Map(), ins = new Map();
   (p.materiais || []).forEach(m => {
@@ -322,7 +451,8 @@ function opNecessidade(p, qtd, jaBaixado) {
     }),
   };
 }
-function opPreviaOrdem(d, jaBaixado, concluida) {
+/* impressa: '' (ainda não impressa), 'acabamento' ou 'concluido' — a ordem já baixou o material. */
+function opPreviaOrdem(d, jaBaixado, impressa) {
   const p = byId('produtos', d.produtoId);
   if (!p) {
     return `<div class="calc"><p class="muted">${d.produtoId
@@ -346,10 +476,11 @@ function opPreviaOrdem(d, jaBaixado, concluida) {
     ${c.semFilamento ? '<p class="aviso txt-sm" style="margin:6px 0">Confira os filamentos no cadastro deste produto: o custo pode estar incompleto.</p>' : ''}
     <div><span>Custo por peça</span><b>${brl(c.custo)}</b></div>
     <div class="tot"><span>Custo total</span><b>${brl(c.custo * qtd)}</b></div>
-    ${faltaAlgo ? `<p class="neg txt-sm" style="margin-top:8px">${concluida
+    ${faltaAlgo ? `<p class="neg txt-sm" style="margin-top:8px">${impressa
     ? 'O estoque registrado não cobre esta ordem. Confira se falta lançar alguma compra.'
     : 'Falta material para esta ordem. Dá para salvar assim mesmo e repor antes de imprimir.'}</p>` : ''}
-    ${concluida ? '<p class="muted txt-sm" style="margin-top:8px">Esta ordem já foi concluída: a coluna Em estoque mostra quanto havia sem a baixa dela. Se mudar o produto ou a quantidade, a baixa é refeita ao salvar.</p>' : ''}
+    ${impressa ? `<p class="muted txt-sm" style="margin-top:8px">${impressa === 'acabamento' ? 'Esta ordem já foi impressa' : 'Esta ordem já foi concluída'}: a coluna Em estoque mostra quanto havia sem a baixa dela. Se mudar o produto ou a quantidade, a baixa é refeita ao salvar.</p>` : ''}
+    ${!impressa && p.acabamento ? `<p class="hint" style="margin-top:8px">Este produto passa por acabamento${p.etapasAcabamento ? ` (${esc(p.etapasAcabamento)})` : ''}: quando a impressão terminar, a ordem vai para Em acabamento, e as peças entram no estoque quando o acabamento ficar pronto.</p>` : ''}
   </div>`;
 }
 
@@ -481,7 +612,7 @@ VIEWS.manutencao = function () {
       ${kpi('Custo real por hora', brl(real.porHora), 'na Configuração: ' + brl(S.config.manutencaoHora) + '/h')}
       ${kpi('Itens vencidos', nf(vencidos), proximos ? opPl(proximos, 'item perto de vencer', 'itens perto de vencer') : 'nenhum item perto de vencer', vencidos ? 'neg' : '')}
     </div>
-    <p class="muted txt-sm" style="margin:-4px 0 18px">O horímetro soma as horas de impressão das ordens concluídas. Se a impressora já tinha horas de uso, informe o horímetro inicial na <a href="#config">Configuração</a>.</p>
+    <p class="muted txt-sm" style="margin:-4px 0 18px">O horímetro soma as horas de impressão das ordens já impressas. Se a impressora já tinha horas de uso, informe o horímetro inicial na <a href="#config">Configuração</a>.</p>
     <div class="panel" id="op-itens"><h2>Itens de manutenção</h2>${itens.length
       ? tabela(['Item', 'A cada', 'Uso desde a última vez', 'Situação', ''], linhasItens)
       : vazio('Nenhum item cadastrado. Cadastre o que precisa ser feito de tempos em tempos e o sistema avisa quando chegar a hora.',

@@ -15,13 +15,22 @@ const cors = {
 };
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
+// Chave de serviço: a nova (SUPABASE_SECRET_KEYS, um JSON com a chave "default") quando existir; senão a antiga,
+// que o Supabase desliga no fim de 2026.
+function chaveServico(): string {
+  try {
+    const k = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") ?? "{}").default;
+    if (k) return k;
+  } catch { /* projeto só com as chaves antigas */ }
+  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ erro: "Método não permitido." }, 405);
   try {
     const body = await req.json().catch(() => ({}));
-    const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+    const admin = createClient(Deno.env.get("SUPABASE_URL")!, chaveServico(), {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
@@ -31,6 +40,14 @@ Deno.serve(async (req: Request) => {
 
     // a tela de cadastro pergunta se ainda falta criar a primeira conta, para explicar qual código pedir
     if (body.consulta === true) return json({ primeiro });
+
+    // no máximo 30 tentativas por minuto vindas do mesmo endereço de internet
+    // endereço de verdade de quem chama: o da Cloudflare (que ninguém consegue forjar) ou o último da cadeia de proxies
+    const cadeia = (req.headers.get("x-forwarded-for") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    const ip = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip") ?? cadeia[cadeia.length - 1] ?? "sem-ip";
+    const { data: liberado, error: eLim } = await admin.rpc("cadastro_limite", { p_ip: ip });
+    if (eLim) throw eLim;
+    if (liberado === false) return json({ erro: "Muitas tentativas seguidas. Espere um minuto e tente de novo." }, 429);
 
     const mail = String(body.email ?? "").trim().toLowerCase();
     const password = String(body.password ?? "");
@@ -62,9 +79,15 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    const { data: lista, error: eL } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-    if (eL) throw eL;
-    const existente = lista.users.find((u) => (u.email ?? "").toLowerCase() === mail);
+    // acha a conta pelo e-mail direto no banco (sem limite de quantidade de contas)
+    const { data: uid, error: eU } = await admin.rpc("usuario_por_email", { p: mail });
+    if (eU) throw eU;
+    let existente: { id: string; app_metadata?: Record<string, unknown> } | null = null;
+    if (uid) {
+      const { data: achado, error: eG } = await admin.auth.admin.getUserById(String(uid));
+      if (eG) throw eG;
+      existente = achado.user;
+    }
     if (existente) {
       if (!primeiro && !recuperaDona) {
         const { data: m, error: eD } = await admin.from("membros").select("papel").eq("user_id", existente.id).maybeSingle();

@@ -40,16 +40,21 @@ function desenharGrafico(el) {
   }
   const pulo = Math.ceil(46 / Math.max(1, (W - mL - mR) / Math.max(1, n - 1)));
   cfg.rotulos.forEach((r, i) => { if ((n - 1 - i) % pulo === 0) svg += `<text x="${x(i)}" y="${H - 8}" text-anchor="middle" class="g-txt">${esc(r)}</text>`; });
-  cfg.series.forEach(s => {
+  // linhas com pathLength="1": o visual desenha a linha da esquerda para a direita ao abrir a tela (classes g-linha, g-area, g-fim)
+  cfg.series.forEach((s, k) => {
     const pts = s.valores.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
-    if (uma && n > 1) svg += `<polygon points="${x(0).toFixed(1)},${y(0).toFixed(1)} ${pts.join(' ')} ${x(n - 1).toFixed(1)},${y(0).toFixed(1)}" fill="${s.cor}" opacity=".1"/>`;
-    if (n > 1) svg += `<polyline points="${pts.join(' ')}" fill="none" stroke="${s.cor}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    if (uma && n > 1) {
+      const gid = el.id + '-area';
+      svg += `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${s.cor}" stop-opacity=".28"/><stop offset="1" stop-color="${s.cor}" stop-opacity="0"/></linearGradient></defs>` +
+        `<polygon class="g-area" points="${x(0).toFixed(1)},${y(0).toFixed(1)} ${pts.join(' ')} ${x(n - 1).toFixed(1)},${y(0).toFixed(1)}" fill="url(#${gid})"/>`;
+    }
+    if (n > 1) svg += `<polyline class="g-linha" pathLength="1" style="animation-delay:${(0.2 + k * 0.15).toFixed(2)}s" points="${pts.join(' ')}" fill="none" stroke="${s.cor}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>`;
   });
   // marcador e valor no último ponto; valores que colidiriam ficam só na legenda, no toque e na tabela
   const usados = [];
   cfg.series.forEach(s => {
     const v = s.valores[n - 1], yy = y(v);
-    svg += `<circle cx="${x(n - 1)}" cy="${yy}" r="4.5" fill="${s.cor}" class="g-anel"/>`;
+    svg += `<circle cx="${x(n - 1)}" cy="${yy}" r="4.5" fill="${s.cor}" class="g-anel g-fim"/>`;
     if (mR >= 60 && !usados.some(u => Math.abs(u - yy) < 15)) { usados.push(yy); svg += `<text x="${x(n - 1) + 10}" y="${yy + 4}" class="g-val">${esc(fmt(v))}</text>`; }
   });
   svg += `<g class="g-hover" visibility="hidden"><line y1="${mT}" y2="${H - mB}" class="g-mira"/>${cfg.series.map(s => `<circle r="4.5" fill="${s.cor}" class="g-anel"/>`).join('')}</g></svg>`;
@@ -82,7 +87,7 @@ function desenharGrafico(el) {
     else if (ev.key === 'Escape') esconder();
   });
 }
-function ativarGraficos() {
+function ativarGraficos() {   // a animação de entrada vem da classe "entra" da tela (styles.css), não daqui
   const vivos = new Set();
   $$('[data-grafico]').forEach(el => { vivos.add(el.id); desenharGrafico(el); });
   [...GRAF.keys()].forEach(k => { if (!vivos.has(k)) GRAF.delete(k); });

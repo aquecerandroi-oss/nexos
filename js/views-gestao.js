@@ -1,6 +1,7 @@
 'use strict';
 /* Nexos — telas de Gestão: Financeiro, Relatórios e Configuração.
-   A tela "Perfil e equipe" fica em js/auth.js. As contas vêm de js/calc.js; aqui só se monta a tela. */
+   A tela "Perfil e equipe" fica em js/auth.js e a de contas a pagar e receber em js/views-contas.js.
+   As contas vêm de js/calc.js; aqui só se monta a tela. Outros arquivos usam gesCategorias (categorias de gasto). */
 
 /* ---------- Ajudantes deste arquivo ---------- */
 /* R$ sem "-R$ 0,00": arredonda nos centavos antes de formatar. */
@@ -18,25 +19,42 @@ const gesFocar = seletor => { const el = $(seletor); if (el) el.focus({ preventS
 
 /* ====================== Financeiro ====================== */
 let gesMes = mesAtual();
-const gesCategorias = ['Aluguel', 'Energia', 'Internet', 'Software', 'Anúncios', 'Embalagens', 'Insumos', 'Frete', 'Contador', 'Equipamentos', 'Retirada', 'Outros'];
+/* Categorias de gasto (também usadas nas contas a pagar). A retirada dos sócios é um tipo de lançamento, não uma categoria. */
+const gesCategorias = ['Aluguel', 'Energia', 'Internet', 'Software', 'Anúncios', 'Embalagens', 'Insumos', 'Frete', 'Contador', 'Equipamentos', 'Outros'];
+/* Tipo do lançamento: 'gasto' (dinheiro que saiu), 'retirada' (o que os sócios tiraram) ou 'entrada' (dinheiro que
+   entrou fora das vendas). Registro antigo sem tipo é gasto, como no cálculo do caixa. */
+const gesTipoLanc = t => (t === 'retirada' || t === 'entrada' ? t : 'gasto');
+const gesExemploLanc = { gasto: 'Ex.: Aluguel da sala', retirada: 'Ex.: Retirada do mês', entrada: 'Ex.: Reembolso de frete' };
+/* Nome do sócio de uma retirada ('1' ou '2', com os nomes da Configuração). */
+const gesNomeSocio = n => { const s = socios().find(x => x.n === String(n || '')); return s ? esc(s.nome) : '<span class="muted">Sem sócio definido</span>'; };
+/* Lançamento criado ao pagar uma conta (que ainda está paga e ligada a ele): só muda desfazendo o pagamento. Um lançamento
+   que perdeu a ligação (por exemplo, a mesma conta paga em dois aparelhos) volta a ser editável aqui. */
+const gesDeConta = l => { const c = l && l.contaId && byId('contas', l.contaId); return !!(c && c.pagoEm && (!c.lancamentoId || c.lancamentoId === l.id)); };
 
 VIEWS.financeiro = function () {
   const c = caixaDoMes(gesMes), mesNome = esc(nomeMesLongo(gesMes)), ant = addMeses(gesMes, -1);
-  const saidas = c.imposto + c.compras + c.manutencao + c.gastos;
+  const saidas = c.imposto + c.compras + c.manutencao + c.gastos + c.devolucoes;
+  const temEntradas = arred(c.entradas, 2) > 0, temDevolucoes = arred(c.devolucoes, 2) > 0;
 
-  /* Demonstrativo: cada saída em uma linha "(−)"; os totais levam a cor do resultado. */
+  /* Demonstrativo: cada saída em uma linha "(−)" e cada entrada em uma "(+)"; os totais levam a cor do resultado. */
   const linha = (rotulo, valor, cls = '') => `<tr><td>${rotulo}</td><td class="right num ${cls}">${gesBrl(valor)}</td></tr>`;
   const menos = (rotulo, valor) => linha('(−) ' + rotulo, valor, arred(valor, 2) > 0 ? 'neg' : 'muted');
+  const mais = (rotulo, valor) => linha('(+) ' + rotulo, valor, arred(valor, 2) > 0 ? 'pos' : 'muted');
   const total = (rotulo, valor) => `<tr class="total"><td>${rotulo}</td><td class="right num ${gesSinal(valor)}">${gesBrl(valor)}</td></tr>`;
   const categorias = Object.keys(c.porCategoria).map(k => ({ nome: k, valor: c.porCategoria[k] }))
     .sort((a, b) => b.valor - a.valor || a.nome.localeCompare(b.nome, 'pt-BR'));
-  const qtdVendas = c.vendas.n ? `<small>${gesPlural(c.vendas.n, 'venda', 'vendas')} · ${gesPlural(c.vendas.qtd, 'peça', 'peças')}</small>` : '';
+  const devolvidas = num(c.vendas.devolvidas) > 0 ? ' · ' + gesPlural(c.vendas.devolvidas, 'devolvida', 'devolvidas') : '';
+  const qtdVendas = c.vendas.n ? `<small>${gesPlural(c.vendas.n, 'venda', 'vendas')} · ${gesPlural(c.vendas.qtd, 'peça', 'peças')}${devolvidas}</small>` : '';
   const demonstrativo = tabela(['Descrição', { t: 'Valor', r: 1 }],
     linha('Vendas' + qtdVendas, c.bruto) +
     menos('Taxas dos canais', c.taxas) +
     menos('Frete pago', c.frete) +
+    (arred(c.aPrazo, 2) > 0 ? menos('Vendas a prazo (contam no caixa quando o cliente paga)', c.aPrazo) : '') +
+    (arred(c.recebidoContas, 2) > 0 ? mais('Recebido de contas a receber (pedidos e sinais)', c.recebidoContas) : '') +
     total('Recebido das vendas', c.liquido) +
+    mais('Outras entradas', c.entradas) +
     menos('Impostos (Simples, estimado)', c.imposto) +
+    (temDevolucoes ? menos('Devoluções (frete de volta e outros gastos)', c.devolucoes) : '') +
     menos('Compras de filamento', c.compras) +
     menos('Manutenção', c.manutencao) +
     (categorias.length ? categorias.map(x => menos(esc(x.nome), x.valor)).join('') : menos('Gastos lançados', 0)) +
@@ -44,22 +62,28 @@ VIEWS.financeiro = function () {
     menos('Retiradas dos sócios', c.retiradas) +
     total('Saldo do mês', c.saldo));
 
-  /* Lançamentos do mês, mais recentes primeiro. */
+  /* Lançamentos do mês, mais recentes primeiro. O que veio de uma conta paga só muda pela tela de contas. */
   const lancs = [...c.lancamentos].sort((a, b) => String(b.data || '').localeCompare(String(a.data || '')) ||
     String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')) || String(b.id).localeCompare(String(a.id)));
+  const selos = { gasto: selo('Gasto'), retirada: selo('Retirada', 'info'), entrada: selo('Entrada', 'ok') };
   const linhasLanc = lancs.map(l => {
-    const retirada = l.tipo === 'retirada';
+    const tipo = gesTipoLanc(l.tipo), conta = gesDeConta(l);
+    const categoria = tipo === 'retirada' ? gesNomeSocio(l.socio) : esc(tipo === 'entrada' ? 'Outras entradas' : l.categoria || 'Outros');
+    const botoes = conta
+      ? gesBotao(tipo === 'entrada' ? 'Desfazer recebimento' : 'Desfazer pagamento', 'ctaDesfazer', l.contaId)
+      : gesBotao('Editar', 'gesEditarLancamento', l.id) + gesBotao('Excluir', 'gesExcluirLancamento', l.id, 'danger');
     return `<tr>
       <td class="num">${esc(dataBR(l.data))}</td>
-      <td>${selo(retirada ? 'Retirada' : 'Gasto', retirada ? 'info' : 'mute')}</td>
-      <td>${esc(retirada ? 'Retirada' : l.categoria || 'Outros')}</td>
-      <td style="min-width:180px">${esc(l.descricao)}</td>
+      <td>${selos[tipo]}</td>
+      <td>${categoria}</td>
+      <td style="min-width:180px">${esc(l.descricao)}${conta ? `<small>${tipo === 'entrada' ? 'Conta recebida' : 'Conta paga'}</small>` : ''}</td>
       <td>${l.fixo ? selo('Todo mês') : ''}</td>
-      <td class="right num">${gesBrl(l.valor)}</td>
-      <td><div class="rowbtns">${gesBotao('Editar', 'gesEditarLancamento', l.id)}${gesBotao('Excluir', 'gesExcluirLancamento', l.id, 'danger')}</div></td></tr>`;
+      <td class="right num${tipo === 'entrada' ? ' pos' : ''}">${gesBrl(l.valor)}</td>
+      <td><div class="rowbtns">${botoes}</div></td></tr>`;
   }).join('');
+  const resumoLanc = `Gastos: ${gesBrl(c.gastos)} · Retiradas: ${gesBrl(c.retiradas)}` + (temEntradas ? ` · Entradas: ${gesBrl(c.entradas)}` : '');
   const fixosAnt = S.lancamentos.filter(l => l.fixo && noPeriodo(l.data, ant, ant)).length;
-  const semLancamentos = vazio(`Nenhum gasto ou retirada em ${mesNome}. Lance aqui aluguel, internet, anúncios e o que os sócios retirarem.`,
+  const semLancamentos = vazio(`Nenhum gasto, retirada ou entrada em ${mesNome}. Lance aqui aluguel, internet, anúncios, o que os sócios retirarem e o dinheiro que entrar fora das vendas.`,
     `<div class="inline" style="justify-content:center"><button type="button" class="btn" onclick="gesNovoLancamento('gasto')">+ Gasto</button>${fixosAnt
       ? `<button type="button" class="btn ghost" style="white-space:normal" onclick="gesCopiarFixos()">Copiar ${gesPlural(fixosAnt, 'lançamento fixo', 'lançamentos fixos')} de ${esc(nomeMesLongo(ant))}</button>` : ''}</div>`);
 
@@ -77,6 +101,7 @@ VIEWS.financeiro = function () {
   return head('Financeiro', 'O que entrou e o que saiu do caixa no mês',
     `<button type="button" class="btn" onclick="gesNovoLancamento('gasto')">+ Gasto</button>
      <button type="button" class="btn ghost" onclick="gesNovoLancamento('retirada')">+ Retirada</button>
+     <button type="button" class="btn ghost" onclick="gesNovoLancamento('entrada')">+ Entrada</button>
      <button type="button" class="btn ghost" onclick="gesCopiarFixos()">Copiar gastos fixos do mês anterior</button>`) + `
     <div class="filtros">
       ${seta(-1, 'Mês anterior', '‹')}
@@ -85,9 +110,10 @@ VIEWS.financeiro = function () {
       ${gesMes === mesAtual() ? '' : '<button type="button" class="btn ghost" data-ges-mes="0" onclick="gesMoverMes(0)">Voltar para este mês</button>'}
     </div>
     <div class="cards">
-      ${kpi('Recebido das vendas', gesBrl(c.liquido), 'já sem taxas e frete', c.liquido < 0 ? 'neg' : '')}
-      ${kpi('Saídas', gesBrl(saidas), 'impostos, compras, manutenção e gastos')}
-      ${kpi('Resultado do caixa', gesBrl(c.resultado), 'recebido menos saídas', gesSinal(c.resultado))}
+      ${kpi('Recebido das vendas', gesBrl(c.liquido), (temEntradas ? 'sem taxas e frete · outras entradas: ' + gesBrl(c.entradas) : 'já sem taxas e frete') +
+        (arred(c.aPrazoAberto, 2) > 0 ? ' · ' + gesBrl(c.aPrazoAberto) + ' ainda a receber' : ''), c.liquido < 0 ? 'neg' : '')}
+      ${kpi('Saídas', gesBrl(saidas), temDevolucoes ? 'impostos, compras, manutenção, gastos e devoluções' : 'impostos, compras, manutenção e gastos')}
+      ${kpi('Resultado do caixa', gesBrl(c.resultado), temEntradas ? 'recebido + outras entradas − saídas' : 'recebido menos saídas', gesSinal(c.resultado))}
       ${kpi('Saldo após retiradas', gesBrl(c.saldo), c.retiradas > 0 ? 'retiradas: ' + gesBrl(c.retiradas) : 'sem retiradas no mês', gesSinal(c.saldo))}
     </div>
     <div class="panel"><h2>Demonstrativo de ${mesNome}</h2>
@@ -95,13 +121,45 @@ VIEWS.financeiro = function () {
         <p class="muted txt-sm mt">O lucro mostrado no Painel e nos Relatórios usa o custo de cada peça vendida. Aqui é o dinheiro que entrou e saiu no mês, por isso os números podem ser diferentes.</p>
       </div>
     </div>
+    ${gesPainelSocios()}
     <div class="panel">
-      <div class="panel-head"><h2>Lançamentos</h2>${lancs.length ? `<span class="muted txt-sm">Gastos: ${gesBrl(c.gastos)} · Retiradas: ${gesBrl(c.retiradas)}</span>` : ''}</div>
-      ${lancs.length ? tabela(['Data', 'Tipo', 'Categoria', 'Descrição', 'Repete', { t: 'Valor', r: 1 }, ''], linhasLanc) : semLancamentos}
+      <div class="panel-head"><h2>Lançamentos</h2>${lancs.length ? `<span class="muted txt-sm">${resumoLanc}</span>` : ''}</div>
+      ${lancs.length ? tabela(['Data', 'Tipo', 'Categoria ou sócio', 'Descrição', 'Repete', { t: 'Valor', r: 1 }, ''], linhasLanc) : semLancamentos}
       ${avisoRateio}
-      <p class="hint" style="margin-top:12px">Compras de filamento, reposição de insumos e manutenções entram sozinhas no demonstrativo. Não precisa lançar de novo aqui.</p>
+      <p class="hint" style="margin-top:12px">Compras de filamento, reposição de insumos, manutenções, devoluções e contas pagas entram sozinhas no demonstrativo. Não precisa lançar de novo aqui.</p>
     </div>`;
 };
+
+/* Divisão do resultado do caixa entre os sócios: no mês da tela e no ano até esse mês. Sócio com 0% e sem retiradas
+   no período não aparece (numa empresa de um dono só, o sócio 2 fica com 0%). */
+function gesPainelSocios() {
+  const somaPct = arred(soma(socios(), 'pct'), 2);
+  const bloco = (titulo, d) => {
+    const linhas = d.socios.filter(s => s.pct > 0 || arred(s.retirado, 2) > 0).map(s => {
+      const saldo = arred(s.saldo, 2);
+      const nota = saldo < 0 ? `<small class="neg">${arred(s.retirado, 2) > 0 ? 'retirou a mais' : 'resultado negativo'}</small>` : '';
+      return `<tr><td>${esc(s.nome)}</td>
+        <td class="right num">${pct(s.pct)}</td>
+        <td class="right num">${gesBrl(s.parte)}</td>
+        <td class="right num">${gesBrl(s.retirado)}</td>
+        <td class="right num ${gesSinal(saldo)}">${gesBrl(saldo)}${nota}</td></tr>`;
+    }).join('') + (arred(d.semSocio, 2) > 0 ? `<tr><td colspan="3">Retiradas sem sócio<small>edite a retirada e escolha o sócio</small></td>
+        <td class="right num">${gesBrl(d.semSocio)}</td><td></td></tr>` : '');
+    return `<div class="calc"><h4>${esc(titulo)}</h4>
+        <div><span>Resultado do caixa</span><b class="${gesSinal(d.resultado)}">${gesBrl(d.resultado)}</b></div>
+        ${linhas ? tabela(['Sócio', { t: '%', r: 1 }, { t: 'Parte do resultado', r: 1 }, { t: 'Já retirou', r: 1 }, { t: 'Saldo', r: 1 }], linhas)
+          : '<div><span>Nenhum sócio com parte definida.</span></div>'}
+      </div>`;
+  };
+  return `<div class="panel"><h2>Divisão entre os sócios</h2>
+      <p class="muted txt-sm">A base é o resultado do caixa antes das retiradas. Nomes e percentuais ficam na <a href="#config">Configuração</a>.</p>
+      ${somaPct !== 100 ? `<p class="aviso txt-sm" style="margin-top:6px">As partes dos sócios somam ${pct(somaPct)}. O certo é somar 100%.</p>` : ''}
+      <div class="cols" style="margin-bottom:0">
+        ${bloco('Em ' + nomeMesLongo(gesMes), divisaoSocios(gesMes, gesMes))}
+        ${bloco('No ano, até ' + nomeMesLongo(gesMes), divisaoSocios(gesMes.slice(0, 4) + '-01', gesMes))}
+      </div>
+    </div>`;
+}
 
 function gesTrocarMes(v) {
   v = String(v || '').trim();
@@ -119,62 +177,77 @@ function gesMoverMes(n) {
   gesFocar(`[data-ges-mes="${n}"]`);
 }
 
-/* Formulário de gasto ou retirada (l = lançamento existente; sem l = novo do tipo informado). */
+/* Formulário de lançamento: gasto, retirada dos sócios ou entrada (l = lançamento existente; sem l = novo do tipo informado). */
 function gesFormLancamento(l, tipoNovo) {
-  const tipo = (l ? l.tipo : tipoNovo) === 'retirada' ? 'retirada' : 'gasto';
-  const vals = l ? { ...l, tipo } : {
-    tipo, data: gesMes === mesAtual() ? hoje() : gesMes + '-01',
-    categoria: tipo === 'retirada' ? 'Retirada' : 'Outros', descricao: '', valor: '', fixo: false,
+  const tipo = gesTipoLanc(l ? l.tipo : tipoNovo);
+  const vals = l ? { ...l, tipo, socio: String(l.socio || '') } : {
+    tipo, data: gesMes === mesAtual() ? hoje() : gesMes + '-01', categoria: 'Outros', socio: '', descricao: '', valor: '', fixo: false,
   };
-  if (tipo === 'retirada') vals.categoria = 'Retirada';
-  else if (!vals.categoria) vals.categoria = 'Outros';
+  /* a categoria só vale no gasto; nos outros tipos o campo fica escondido com "Outros", para o caso de virar gasto */
+  if (tipo !== 'gasto' || !vals.categoria) vals.categoria = 'Outros';
   /* categoria antiga fora da lista continua disponível, para não ser trocada sem querer ao editar */
   const categorias = gesCategorias.includes(vals.categoria) ? gesCategorias : [...gesCategorias, vals.categoria];
   openForm({
-    title: l ? 'Editar lançamento' : tipo === 'retirada' ? 'Nova retirada' : 'Novo gasto',
+    title: l ? 'Editar lançamento' : { gasto: 'Novo gasto', retirada: 'Nova retirada', entrada: 'Nova entrada' }[tipo],
     fields: [
-      { k: 'tipo', label: 'Tipo', type: 'select', options: [['gasto', 'Gasto'], ['retirada', 'Retirada dos sócios']] },
+      { k: 'tipo', label: 'Tipo', type: 'select', options: [['gasto', 'Gasto'], ['retirada', 'Retirada dos sócios'], ['entrada', 'Entrada (fora das vendas)']],
+        hint: 'Entrada é dinheiro que entrou fora das vendas, como um reembolso.' },
       { k: 'data', label: 'Data', type: 'date', req: true },
       { k: 'categoria', label: 'Categoria', type: 'select', options: categorias.map(x => [x, x]) },
+      { k: 'socio', label: 'Sócio', type: 'select', options: [...socios().map(s => [s.n, s.nome]), ['', 'Sem sócio definido']],
+        hint: 'Quem retirou. Entra na divisão entre os sócios.' },
       { k: 'valor', label: 'Valor (R$)', type: 'number', req: true },
-      { k: 'descricao', label: 'Descrição', req: true, full: true, ph: tipo === 'retirada' ? 'Ex.: Retirada do mês' : 'Ex.: Aluguel da sala' },
-      { k: 'fixo', label: 'Repete todo mês (gasto fixo)', type: 'check', full: true,
+      { k: 'descricao', label: 'Descrição', req: true, full: true, ph: gesExemploLanc[tipo] },
+      { k: 'fixo', label: 'Repete todo mês', type: 'check', full: true,
         hint: 'No mês seguinte, use “Copiar gastos fixos do mês anterior” para repetir este lançamento.' },
     ],
     vals,
-    change(el, form) {                                   // tipo e categoria andam juntos: "Retirada" é só o que os sócios retiram
-      const tipoEl = form.elements.tipo, cat = form.elements.categoria;
-      if (el.name === 'tipo') {
-        if (el.value === 'retirada') cat.value = 'Retirada';
-        else if (cat.value === 'Retirada') cat.value = 'Outros';
-      } else if (el.name === 'categoria') {
-        tipoEl.value = el.value === 'Retirada' ? 'retirada' : 'gasto';
-      }
-    },
+    change(el, form) { if (el.name === 'tipo') gesAjustarLancamento(form); },
     save(d) {
-      const valor = arred(d.valor, 2), retirada = d.tipo === 'retirada' || d.categoria === 'Retirada';
+      const tipoFinal = gesTipoLanc(d.tipo), valor = arred(d.valor, 2);
       if (!/^20\d{2}-\d{2}-\d{2}$/.test(d.data)) { toast('Confira a data do lançamento.', 'bad'); return false; }
       if (!d.descricao) { toast('Escreva uma descrição.', 'bad'); return false; }
       if (!(valor > 0)) { toast('Informe um valor maior que zero.', 'bad'); return false; }
-      put('lancamentos', { ...(l || { id: uid(), criadoEm: agoraISO() }), ...d, valor,
-        tipo: retirada ? 'retirada' : 'gasto', categoria: retirada ? 'Retirada' : d.categoria });
+      const rec = { ...((l && byId('lancamentos', l.id)) || l || { id: uid(), criadoEm: agoraISO() }),
+        tipo: tipoFinal, data: d.data, descricao: d.descricao, valor, fixo: !!d.fixo,
+        categoria: tipoFinal === 'retirada' ? 'Retirada' : tipoFinal === 'entrada' ? 'Outras entradas' : d.categoria || 'Outros' };
+      if (tipoFinal === 'retirada') rec.socio = d.socio === '1' || d.socio === '2' ? d.socio : '';
+      else delete rec.socio;
+      put('lancamentos', rec);
       const mes = d.data.slice(0, 7);
       if (mes === gesMes) toast('Lançamento salvo.');
       else { gesMes = mes; toast('Lançamento salvo em ' + nomeMesLongo(mes) + '. A tela foi para esse mês.'); }
     },
   });
+  gesAjustarLancamento(FORM && FORM.form);
+}
+/* Mostra no formulário só o que vale para o tipo escolhido: a categoria no gasto e o sócio na retirada. */
+function gesAjustarLancamento(form) {
+  if (!form || !form.elements.tipo) return;
+  const tipo = gesTipoLanc(form.elements.tipo.value);
+  const mostrar = (nome, sim) => { const el = form.elements[nome]; if (el && el.parentElement) el.parentElement.hidden = !sim; };
+  mostrar('categoria', tipo === 'gasto');
+  mostrar('socio', tipo === 'retirada');
+  if (form.elements.descricao) form.elements.descricao.placeholder = gesExemploLanc[tipo];
 }
 function gesNovoLancamento(tipo) { gesFormLancamento(null, tipo); }
 function gesEditarLancamento(id) {
   const l = byId('lancamentos', id);
   if (!l) return toast('Esse lançamento não existe mais.', 'bad');
+  if (gesDeConta(l)) return toast('Este lançamento veio de uma conta paga. Para mudar, desfaça o pagamento em Contas a pagar e receber.', 'bad');
   gesFormLancamento(l);
 }
 function gesExcluirLancamento(id) {
   const l = byId('lancamentos', id);
   if (!l) return;
+  if (gesDeConta(l)) return toast('Este lançamento veio de uma conta paga. Para tirar, desfaça o pagamento em Contas a pagar e receber.', 'bad');
   if (!confirmar(`Excluir o lançamento “${l.descricao || 'sem descrição'}” de ${gesBrl(l.valor)}?`)) return;
   rm('lancamentos', id); render(); toast('Lançamento excluído.');
+}
+/* Abre a tela de contas na aba das pagas, onde o pagamento pode ser desfeito. */
+function gesVerEmContas() {
+  if (typeof ctaMostrar === 'function') ctaMostrar('pagas');
+  else ir('contas');
 }
 function gesCopiarFixos() {
   const ant = addMeses(gesMes, -1), antNome = nomeMesLongo(ant);
@@ -290,10 +363,12 @@ function gesPainelConsumo(serie, ini, fim) {
    (por exemplo, ao salvar um canal de venda logo abaixo do formulário). */
 let gesRascunho = null;
 const gesGradeConfig = 'grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr))';
+/* grade: arranjo próprio do painel (nos sócios, nome e parte de cada um ficam lado a lado). */
 const gesPaineisConfig = [
   { id: 'impostos', titulo: 'Impostos e margem', campos: [
     { k: 'imposto', type: 'number', label: 'Imposto sobre a venda — Simples Nacional (%)', hint: 'Use a alíquota efetiva do seu Simples. Confirme com o contador.' },
-    { k: 'margem', type: 'number', label: 'Margem de lucro desejada (%)', hint: 'Usada para calcular o preço sugerido' },
+    { k: 'margem', type: 'number', label: 'Margem de lucro desejada (%)', hint: 'Usada no preço sugerido dos canais sem margem própria' },
+    { k: 'impostoConfirmado', type: 'check', full: true, label: 'Já confirmei a alíquota com o contador' },
   ] },
   { id: 'falhas', titulo: 'Falhas de impressão', campos: [
     { k: 'falha', type: 'number', label: 'Taxa fixa de falhas (%)' },
@@ -308,7 +383,7 @@ const gesPaineisConfig = [
     { k: 'horimetroInicial', type: 'number', label: 'Horas que a impressora já tinha', hint: 'Somadas às horas das ordens concluídas para os avisos de manutenção' },
   ] },
   { id: 'fixos', titulo: 'Mão de obra e gastos fixos', campos: [
-    { k: 'maoObraHora', type: 'number', label: 'Mão de obra (R$ por hora)' },
+    { k: 'maoObraHora', type: 'number', label: 'Valor geral da hora de mão de obra (R$)', hint: 'Usado nas etapas sem pessoa escolhida' },
     { k: 'custosFixos', type: 'number', label: 'Gastos fixos mensais (R$)', hint: 'Aluguel, internet, softwares… rateados por hora impressa' },
     { k: 'horasMes', type: 'number', label: 'Horas de impressão por mês', hint: 'Divide os gastos fixos' },
     { k: 'alertaEstoque', type: 'number', label: 'Avisar quando o filamento chegar em (g)' },
@@ -317,9 +392,18 @@ const gesPaineisConfig = [
     { k: 'metaFat', type: 'number', label: 'Meta de faturamento (R$)' },
     { k: 'metaLucro', type: 'number', label: 'Meta de lucro (R$)' },
   ] },
+  { id: 'socios', titulo: 'Sócios', grade: 'grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr));max-width:640px', campos: [
+    { k: 'socio1Nome', label: 'Nome do sócio 1' },
+    { k: 'socio1Pct', type: 'number', label: 'Parte do sócio 1 no resultado (%)' },
+    { k: 'socio2Nome', label: 'Nome do sócio 2' },
+    { k: 'socio2Pct', type: 'number', label: 'Parte do sócio 2 no resultado (%)' },
+  ] },
 ];
 const gesCamposConfig = gesPaineisConfig.flatMap(p => p.campos);
-const gesIgualCampo = (f, a, b) => (f.type === 'check' ? !!a === !!b : num(a) === num(b));
+/* Valor do formulário igual ao salvo? Sim/não compara ligado com desligado, número compara o valor e texto compara o texto. */
+const gesIgualCampo = (f, a, b) => (f.type === 'check' ? !!a === !!b : f.type === 'number' ? num(a) === num(b) : String(a ?? '') === String(b ?? ''));
+/* Aviso quando as partes dos sócios não somam 100% ('' quando somam). */
+const gesTextoSomaSocios = v => { const t = arred(num(v.socio1Pct) + num(v.socio2Pct), 2); return t === 100 ? '' : `As partes somam ${pct(t)}. O certo é somar 100%.`; };
 
 VIEWS.config = function () {
   if (gesRascunho) {                                   // tira do rascunho o que já ficou igual ao valor salvo
@@ -332,12 +416,17 @@ VIEWS.config = function () {
       ? `Custo real medido: ${brl(mr.porHora)} por hora (${brl(mr.custo)} em ${horasFmt(mr.horas)} de impressão)`
       : 'Custo real medido: ainda não há horas impressas para calcular',
   };
+  const somaSocios = gesTextoSomaSocios(valores);
+  /* data-ges-aviso-imposto e data-ges-soma-socios mudam enquanto a pessoa digita (gesRascunhar) */
   const extras = {
+    impostos: `<p class="aviso txt-sm mt" data-ges-aviso-imposto${valores.impostoConfirmado ? ' hidden' : ''}>Confirme a alíquota com o contador: ela entra no preço sugerido e no lucro de cada venda.</p>`,
     falhas: gesTextoFalha(),
     metas: '<p class="hint" style="margin-top:10px">As metas aparecem no Painel, comparadas com as vendas do mês. Deixe 0 para não usar.</p>',
+    socios: `<p class="aviso txt-sm mt" data-ges-soma-socios${somaSocios ? '' : ' hidden'}>${esc(somaSocios)}</p>
+      <p class="hint" style="margin-top:10px">A parte de cada sócio no resultado do caixa aparece no Financeiro, junto com o que cada um já retirou.</p>`,
   };
   const paineis = gesPaineisConfig.map(p => `<div class="panel"><h2>${esc(p.titulo)}</h2>
-      <div class="grid3" style="${gesGradeConfig}">${p.campos.map(f => campo(dicas[f.k] ? { ...f, hint: dicas[f.k] } : f, valores[f.k])).join('')}</div>${extras[p.id] || ''}</div>`).join('');
+      <div class="grid3" style="${p.grade || gesGradeConfig}">${p.campos.map(f => campo(dicas[f.k] ? { ...f, hint: dicas[f.k] } : f, valores[f.k])).join('')}</div>${extras[p.id] || ''}</div>`).join('');
   const oculto = gesRascunho ? '' : ' hidden';
   return head('Configuração', 'Tudo que entra no cálculo de custo e lucro') + `
     <form onsubmit="gesSalvarConfig(event)" oninput="gesRascunhar(this)" style="margin-bottom:22px">
@@ -349,7 +438,9 @@ VIEWS.config = function () {
         <button class="btn">Salvar configuração</button>
       </div>
     </form>
-    ${gesPainelCanais()}`;
+    ${gesPainelPessoas()}
+    ${gesPainelCanais()}
+    ${typeof shopeePainelConfig === 'function' ? shopeePainelConfig() : ''}`;
 };
 
 /* Taxa de falhas medida hoje e qual das duas (medida ou fixa) está valendo no custo. */
@@ -385,12 +476,16 @@ function gesResumoHora() {
     <p class="hint">Conta feita com os valores já salvos. No custo de cada peça entram também o filamento, a mão de obra, os insumos e a taxa de falhas.</p>`;
 }
 
-/* Guarda só o que está diferente do valor salvo e mostra o aviso de alterações pendentes. */
+/* Guarda só o que está diferente do valor salvo e mostra o aviso de alterações pendentes.
+   Também atualiza, enquanto a pessoa digita, o aviso da alíquota e a soma das partes dos sócios. */
 function gesRascunhar(form) {
   const v = lerCampos(form, gesCamposConfig), dif = {};
   gesCamposConfig.forEach(f => { if (f.k in v && !gesIgualCampo(f, v[f.k], S.config[f.k])) dif[f.k] = v[f.k]; });
   gesRascunho = Object.keys(dif).length ? dif : null;
   $$('[data-ges-rascunho]', form).forEach(el => { el.hidden = !gesRascunho; });
+  const imposto = $('[data-ges-aviso-imposto]', form), somaEl = $('[data-ges-soma-socios]', form), txt = gesTextoSomaSocios(v);
+  if (imposto) imposto.hidden = !!v.impostoConfirmado;
+  if (somaEl) { somaEl.textContent = txt; somaEl.hidden = !txt; }
 }
 function gesDescartarConfig() { gesRascunho = null; render(); }
 function gesSalvarConfig(e) {
@@ -399,9 +494,70 @@ function gesSalvarConfig(e) {
   if (v.imposto + v.margem >= 100) {
     return toast('Imposto e margem juntos precisam ficar abaixo de 100%. A margem é a parte do preço de venda que fica como lucro.', 'bad');
   }
+  const somaSocios = arred(num(v.socio1Pct) + num(v.socio2Pct), 2);
+  if (somaSocios > 100 && !confirmar(`As partes dos sócios somam ${pct(somaSocios)}, mais que 100%. Assim a divisão no Financeiro reparte mais do que o resultado.\n\nSalvar mesmo assim?`)) return;
   Object.assign(S.config, v);
   gesRascunho = null;
   saveMeta('config'); render(); toast('Configuração salva.');
+}
+
+/* ---------- Pessoas da mão de obra ---------- */
+/* Produtos que têm a pessoa em alguma etapa da mão de obra. */
+const gesProdutosDaPessoa = id => S.produtos.filter(p => linhasMaoObra(p).some(l => l.pessoaId === id));
+
+function gesPainelPessoas() {
+  const geral = brl(S.config.maoObraHora);
+  const pessoas = [...S.pessoas].sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR'));
+  const linhas = pessoas.map(p => {
+    const n = gesProdutosDaPessoa(p.id).length;
+    return `<tr>
+      <td style="min-width:150px"><b>${esc(p.nome)}</b>${n ? `<small>em ${gesPlural(n, 'produto', 'produtos')}</small>` : ''}</td>
+      <td class="right num">${num(p.valorHora) > 0 ? brl(p.valorHora) : `<span class="muted">valor geral (${geral})</span>`}</td>
+      <td><div class="rowbtns">${gesBotao('Editar', 'gesEditarPessoa', p.id)}${gesBotao('Excluir', 'gesExcluirPessoa', p.id, 'danger')}</div></td></tr>`;
+  }).join('');
+  return `<div class="panel">
+      <div class="panel-head"><h2>Pessoas da mão de obra</h2><button type="button" class="btn sm" onclick="gesEditarPessoa()">+ Nova pessoa</button></div>
+      ${pessoas.length
+        ? tabela(['Pessoa', { t: 'Valor da hora', r: 1 }, ''], linhas)
+        : vazio(`Nenhuma pessoa cadastrada. Cadastre quem faz acabamento, montagem ou embalagem, com o valor da hora de cada um. Sem pessoa, vale o valor geral de ${geral} por hora.`,
+          '<button type="button" class="btn" onclick="gesEditarPessoa()">+ Nova pessoa</button>')}
+      <p class="hint" style="margin-top:12px">No cadastro do produto, cada etapa da mão de obra pode ter a sua pessoa e os seus minutos.</p>
+    </div>`;
+}
+/* Formulário de pessoa (sem id = nova). */
+function gesEditarPessoa(id) {
+  const p = id ? byId('pessoas', id) : null;
+  if (id && !p) return toast('Essa pessoa não existe mais.', 'bad');
+  openForm({
+    title: p ? 'Editar pessoa' : 'Nova pessoa',
+    fields: [
+      { k: 'nome', label: 'Nome', req: true, full: true, ph: 'Ex.: Ana (acabamento)' },
+      { k: 'valorHora', label: 'Valor da hora (R$)', type: 'number', hint: `Deixe 0 para usar o valor geral de ${brl(S.config.maoObraHora)} por hora.` },
+    ],
+    vals: p ? { ...p, valorHora: num(p.valorHora) > 0 ? p.valorHora : '' } : { nome: '', valorHora: '' },
+    preview(d) {
+      const propria = num(d.valorHora) > 0, vh = propria ? num(d.valorHora) : num(S.config.maoObraHora);
+      return `<p class="hint">Exemplo: 30 minutos de trabalho custam ${brl(vh / 2)}${propria ? '' : ' (valor geral)'}.</p>`;
+    },
+    save(d) {
+      if (!d.nome) { toast('Informe o nome da pessoa.', 'bad'); return false; }
+      const nome = d.nome.toLowerCase();
+      if (S.pessoas.some(x => x.id !== (p ? p.id : '') && String(x.nome || '').trim().toLowerCase() === nome)) {
+        toast('Já existe uma pessoa com esse nome.', 'bad'); return false;
+      }
+      put('pessoas', { ...((p && byId('pessoas', p.id)) || p || {}), nome: d.nome, valorHora: arred(d.valorHora, 2), id: p ? p.id : uid() });
+      toast(p ? 'Pessoa atualizada.' : 'Pessoa cadastrada.');
+    },
+  });
+}
+function gesExcluirPessoa(id) {
+  const p = byId('pessoas', id);
+  if (!p) return;
+  const n = gesProdutosDaPessoa(id).length;
+  let msg = `Excluir “${p.nome}” da lista de pessoas?`;
+  if (n) msg += `\n\nEssa pessoa aparece na mão de obra de ${gesPlural(n, 'produto', 'produtos')}. Essas etapas passam a usar o valor geral da hora (${brl(S.config.maoObraHora)}).`;
+  if (!confirmar(msg)) return;
+  rm('pessoas', id); render(); toast('Pessoa excluída.');
 }
 
 /* ---------- Canais de venda ---------- */
@@ -414,18 +570,19 @@ function gesPainelCanais() {
       <td class="right num">${pct(c.pct)}</td>
       <td class="right num">${brl(c.fixa)}</td>
       <td class="right num">${brl(c.frete)}</td>
+      <td class="right num">${pct(margemDoCanal(c))}${num(c.margem) > 0 ? '' : ' <span class="muted">(geral)</span>'}</td>
       <td><div class="rowbtns">${gesBotao('Editar', 'gesEditarCanal', c.id)}${gesBotao('Excluir', 'gesExcluirCanal', c.id, 'danger')}</div></td></tr>`;
   }).join('');
   return `<div class="panel">
       <div class="panel-head"><h2>Canais de venda e taxas</h2><button type="button" class="btn sm" onclick="gesEditarCanal()">+ Novo canal</button></div>
       ${canais.length
-        ? tabela(['Canal', { t: 'Comissão (%)', r: 1 }, { t: 'Taxa fixa por unidade', r: 1 }, { t: 'Frete pago por pedido', r: 1 }, ''], linhas)
+        ? tabela(['Canal', { t: 'Comissão (%)', r: 1 }, { t: 'Taxa fixa por unidade', r: 1 }, { t: 'Frete pago por pedido', r: 1 }, { t: 'Margem', r: 1 }, ''], linhas)
         : vazio('Nenhum canal de venda cadastrado. Cadastre onde você vende (Instagram, Shopee, Mercado Livre…) para ver o preço e o lucro em cada um.',
           '<button type="button" class="btn" onclick="gesEditarCanal()">+ Novo canal</button>')}
       <p class="hint" style="margin-top:12px">As taxas dos marketplaces mudam de tempos em tempos. Vale conferir no painel do vendedor de cada um e atualizar aqui.</p>
     </div>`;
 }
-/* Formulário de canal (sem id = novo). */
+/* Formulário de canal (sem id = novo). Margem vazia ou 0 usa a margem geral da Configuração. */
 function gesEditarCanal(id) {
   const c = id ? byId('canais', id) : null;
   if (id && !c) return toast('Esse canal não existe mais.', 'bad');
@@ -436,25 +593,30 @@ function gesEditarCanal(id) {
       { k: 'pct', label: 'Comissão (%)', type: 'number' },
       { k: 'fixa', label: 'Taxa fixa por unidade vendida (R$)', type: 'number' },
       { k: 'frete', label: 'Frete pago pela Nexos por pedido (R$)', type: 'number', hint: '0 se o cliente paga o frete' },
+      { k: 'margem', label: 'Margem desejada neste canal (%)', type: 'number', hint: `Vazio ou 0 usa a margem geral de ${pct(S.config.margem)}.` },
       { type: 'html', html: '<p class="hint">Mudanças nas taxas valem para as próximas vendas. As vendas já registradas guardam as taxas do dia em que foram feitas.</p>' },
     ],
-    vals: c || { nome: '', pct: 0, fixa: 0, frete: 0 },
+    vals: c ? { ...c, margem: num(c.margem) > 0 ? c.margem : '' } : { nome: '', pct: 0, fixa: 0, frete: 0, margem: '' },
     preview(d) {
-      const x = precoNoCanal({}, { id: '', pct: d.pct, fixa: d.fixa, frete: d.frete }, 100, 0);
+      const canal = { id: '', pct: d.pct, fixa: d.fixa, frete: d.frete, margem: d.margem };
+      const x = precoNoCanal({}, canal, 100, 0), semSugestao = !(precoNoCanal({}, canal, null, 1).sugerido > 0);
       return `<div class="calc"><h4>Exemplo: pedido com uma peça de ${brl(x.preco)}</h4>
         <div><span>Comissão e taxa fixa do canal</span><b>${brl(x.taxa)}</b></div>
         <div><span>Frete pago no pedido</span><b>${brl(x.frete)}</b></div>
         <div><span>Imposto (${pct(S.config.imposto)})</span><b>${brl(x.imposto)}</b></div>
-        <div class="tot"><span>Sobra para o custo da peça e o lucro</span><b>${gesBrl(x.lucro)}</b></div></div>`;
+        <div class="tot"><span>Sobra para o custo da peça e o lucro</span><b>${gesBrl(x.lucro)}</b></div></div>
+        <p class="hint">Margem usada no preço sugerido deste canal: ${pct(x.margemAlvo)}${num(d.margem) > 0 ? '' : ' (a geral)'}.</p>
+        ${semSugestao ? '<p class="aviso txt-sm" style="margin-top:8px">Comissão, imposto e margem somam 100% ou mais: não dá para sugerir preço neste canal.</p>' : ''}`;
     },
     save(d) {
       if (!d.nome) { toast('Dê um nome ao canal.', 'bad'); return false; }
       if (d.pct >= 100) { toast('A comissão precisa ser menor que 100%.', 'bad'); return false; }
+      if (d.margem >= 100) { toast('A margem precisa ser menor que 100%.', 'bad'); return false; }
       const nome = d.nome.toLowerCase();
       if (S.canais.some(x => x.id !== (c ? c.id : '') && String(x.nome || '').trim().toLowerCase() === nome)) {
         toast('Já existe um canal com esse nome.', 'bad'); return false;
       }
-      put('canais', { ...(c || {}), ...d, id: c ? c.id : uid() });
+      put('canais', { ...(c || {}), ...d, margem: arred(d.margem, 2), id: c ? c.id : uid() });
       toast(c ? 'Canal atualizado.' : 'Canal criado.');
     },
   });

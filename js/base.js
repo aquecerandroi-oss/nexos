@@ -72,11 +72,12 @@ const nomeMesLongo = mes => { const [a, m] = mes.split('-').map(Number); return 
 
 /* ---------- Estado ---------- */
 const COLS = ['canais', 'filamentos', 'fornecedores', 'compras', 'insumos', 'produtos', 'ordens', 'vendas',
-  'clientes', 'orcamentos', 'falhas', 'manutItens', 'manutHist', 'lancamentos'];
+  'clientes', 'orcamentos', 'falhas', 'manutItens', 'manutHist', 'lancamentos', 'pessoas', 'contas'];
 const CONFIG_PADRAO = {
   kwh: 0.95, potencia: 150, valorImpressora: 2500, vidaUtil: 5000, manutencaoHora: 0.3,
-  maoObraHora: 20, falha: 5, falhaAuto: true, imposto: 6, margem: 40,
+  maoObraHora: 20, falha: 5, falhaAuto: true, imposto: 6, impostoConfirmado: false, margem: 40,
   custosFixos: 0, horasMes: 200, alertaEstoque: 200, horimetroInicial: 0, metaFat: 0, metaLucro: 0,
+  socio1Nome: 'Sócio 1', socio1Pct: 50, socio2Nome: 'Sócio 2', socio2Pct: 50,
 };
 const PERFIL_PADRAO = { empresa: 'Nexos', responsavel: '', cnpj: '', email: '', telefone: '', cidade: '', logo: '' };
 const CANAIS_PADRAO = [
@@ -96,7 +97,7 @@ let EU = { id: '', email: '', papel: '' };
 const ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
 /* Além do id, os campos que são listas precisam ser listas de objetos: um registro torto (backup adulterado,
    gravação por fora) derrubaria as telas que somam esses campos. */
-const CAMPOS_LISTA = ['materiais', 'insumos', 'consumo', 'insumosUsados', 'itens'];
+const CAMPOS_LISTA = ['materiais', 'insumos', 'consumo', 'insumosUsados', 'itens', 'maoObra', 'devolucoes'];
 /* Nada que vem do banco pode trazer as chaves toString ou valueOf (nem aninhar além do razoável): um valor assim
    não vira texto nem número e derrubaria toda tela que o mostrasse. */
 const semArmadilha = (v, nivel = 0) => {
@@ -376,7 +377,43 @@ let escondidoEm = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { escondidoEm = Date.now(); return; }
   if (escondidoEm && Date.now() - escondidoEm > 60000 && $('#main')) recarregar();
+  conferirVersao();
 });
+
+/* ---------- Versão nova publicada ----------
+   Uma aba aberta continua na versão antiga até ser recarregada. Ao voltar para a aba (no máximo a cada 5 minutos) e a
+   cada 30 minutos, confere o número da versão publicada e, se houver uma mais nova, oferece atualizar. */
+const VERSAO = 14;
+let avisouVersao = false, conferidoEm = 0;
+async function conferirVersao(forcar = false) {
+  if (DEMO || avisouVersao || !$('#main') || (!forcar && Date.now() - conferidoEm < 5 * 60000)) return;
+  conferidoEm = Date.now();
+  try {
+    const r = await fetch('index.html?versao=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const m = /js\/base\.js\?v=(\d+)/.exec(await r.text());
+    if (m && Number(m[1]) > VERSAO) { avisouVersao = true; mostrarVersaoNova(); }
+  } catch (e) { /* sem internet: confere de novo mais tarde */ }
+}
+setInterval(() => conferirVersao(true), 30 * 60000);
+function mostrarVersaoNova() {
+  if ($('#versaoNova')) return;
+  document.body.insertAdjacentHTML('beforeend', `<div id="versaoNova" class="versao-nova" role="status">
+    <span><b>Versão nova do Nexos.</b> Atualize para usar as novidades.</span>
+    <button type="button" class="btn sm" onclick="atualizarVersao()">Atualizar agora</button>
+    <button type="button" class="x" aria-label="Depois" onclick="adiarVersao(this)">✕</button></div>`);
+}
+/* "Depois": esconde o aviso agora, mas ele volta na próxima conferência (ao voltar para a aba ou a cada 30 minutos). */
+function adiarVersao(botao) {
+  if (botao && botao.parentNode) botao.parentNode.remove();
+  avisouVersao = false; conferidoEm = Date.now();
+}
+function atualizarVersao() {
+  if (temPendencias()) { toast('Aguarde um instante: ainda há dados sendo salvos.'); descarregar(); return; }
+  if (FORM && FORM.sujo && !confirmar('Há um formulário preenchido e ainda não salvo. Atualizar mesmo assim?')) return;
+  if (FORM) FORM.sujo = false;
+  location.reload();
+}
 let recarregarDepois = false, recarregando = false, recarregarDeNovo = false;
 async function recarregar(tentativa = 0) {
   if (temPendencias()) { recarregarDepois = true; descarregar(); return; }      // grava o que falta e recarrega em seguida
@@ -460,6 +497,7 @@ const IC = {
   compras: '<path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
   insumos: '<path d="M3 7h18v13H3z"/><path d="m3 7 3-4h12l3 4M10 11h4"/>',
   financeiro: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M15 15h3"/>',
+  contas: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M8.5 15l2.2 2.2 4.8-4.8"/>',
   relatorios: '<path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-9"/>',
   config: '<path d="M4 6h8M16 6h4M4 12h2M10 12h10M4 18h10M18 18h2"/><circle cx="14" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="18" r="2"/>',
   perfil: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
@@ -469,7 +507,7 @@ const NAV = [
   ['Operação', [['painel', 'Painel'], ['producao', 'Produção'], ['falhas', 'Falhas'], ['manutencao', 'Manutenção']]],
   ['Comercial', [['produtos', 'Produtos'], ['vendas', 'Vendas e estoque'], ['orcamentos', 'Orçamentos'], ['clientes', 'Clientes']]],
   ['Materiais', [['filamentos', 'Filamentos'], ['compras', 'Compras'], ['insumos', 'Insumos']]],
-  ['Gestão', [['financeiro', 'Financeiro'], ['relatorios', 'Relatórios'], ['config', 'Configuração'], ['perfil', 'Perfil e equipe']]],
+  ['Gestão', [['financeiro', 'Financeiro'], ['contas', 'Contas a pagar e receber'], ['relatorios', 'Relatórios'], ['config', 'Configuração'], ['perfil', 'Perfil e equipe']]],
 ];
 const VIEWS = {};
 const paginaAtual = () => location.hash.replace(/^#\/?/, '').split('?')[0] || 'painel';
@@ -489,13 +527,17 @@ window.addEventListener('hashchange', e => {
 /* Telas que dependem do relógio (previsão da fila, prazos) se atualizam sozinhas a cada minuto. */
 setInterval(() => { if (!document.hidden && $('#main') && ['painel', 'producao'].includes(paginaAtual())) pedirRender(); }, 60000);
 
+/* Marca do menu: o símbolo e o nome da Nexos (animados pelo visual.js). Se a empresa escolheu outra logo no Perfil,
+   vale a dela, com o nome da empresa em texto. */
 function logoHTML() {
-  const n = String(S.perfil.empresa || 'Nexos').toUpperCase();
-  const i = n.indexOf('X');
-  const txt = i >= 0 ? esc(n.slice(0, i)) + '<b>X</b>' + esc(n.slice(i + 1)) : esc(n);
-  const logo = logoSegura(S.perfil.logo);
-  const img = logo ? `<img src="${esc(logo)}" alt="">` : '<img src="img/icon.svg" alt="">';
-  return `${img}<div><div class="logo">${txt}</div><small>Produção 3D</small></div>`;
+  const propria = logoSegura(S.perfil.logo);
+  if (propria) {
+    const n = String(S.perfil.empresa || 'Nexos').toUpperCase(), i = n.indexOf('X');
+    const txt = i >= 0 ? esc(n.slice(0, i)) + '<b>X</b>' + esc(n.slice(i + 1)) : esc(n);
+    return `<img class="brand-propria" src="${esc(propria)}" alt=""><div><div class="logo">${txt}</div><small>Produção 3D</small></div>`;
+  }
+  return `<span class="marca-viva" aria-hidden="true"><img src="img/marca.webp" alt="" width="44" height="44"></span>
+    <span class="brand-nome"><img src="img/nome.webp" alt="Nexos 3D" width="134" height="34"><small>Produção 3D</small></span>`;
 }
 function montarEstrutura() {
   $('#app').innerHTML = `
@@ -517,19 +559,26 @@ function montarEstrutura() {
   mostrarSync(syncEstado);
 }
 let ultimaPagina = '';
+/* Ganchos chamados depois de cada desenho da tela: fn(trocouDeTela, pagina). O visual.js usa para as animações de
+   entrada, que só acontecem quando a pessoa troca de tela (e não a cada atualização que chega de outro aparelho). */
+const DEPOIS_RENDER = [];
 function render() {
   if (!$('#main')) return;
   renderPendente = false;
   const pg = VIEWS[paginaAtual()] ? paginaAtual() : 'painel';
+  const trocou = pg !== ultimaPagina;
   // guarda a rolagem lateral das tabelas para devolver depois de redesenhar a mesma tela
-  const rolagens = pg === ultimaPagina ? $$('#main .scroll').map(s => s.scrollLeft) : [];
+  const rolagens = !trocou ? $$('#main .scroll').map(s => s.scrollLeft) : [];
   ultimaPagina = pg;
   // marca e avisos do menu nunca podem impedir a tela de abrir: um dado torto aqui trancaria todo mundo para fora
-  try { const marca = logoHTML(); $$('.brand').forEach(b => { b.innerHTML = marca; }); } catch (e) { console.error(e); }
+  // marca e menu só são trocados quando mudam: assim a logo animada não recomeça a cada atualização da tela
+  try { const marca = logoHTML(); $$('.brand').forEach(b => { if (b._marca !== marca) { b.innerHTML = marca; b._marca = marca; } }); } catch (e) { console.error(e); }
   let avisos = {};
   try { if (typeof contagemAvisos === 'function') avisos = contagemAvisos() || {}; } catch (e) { console.error(e); }
-  $('#nav').innerHTML = NAV.map(([grupo, itens]) => `<div class="nav-g">${grupo}</div>` + itens.map(([k, l]) =>
+  const menu = NAV.map(([grupo, itens]) => `<div class="nav-g">${grupo}</div>` + itens.map(([k, l]) =>
     `<a href="#${k}" class="${k === pg ? 'on' : ''}">${icone(k)}<span>${l}</span>${avisos[k] ? `<em class="pill">${avisos[k]}</em>` : ''}</a>`).join('')).join('');
+  const nav = $('#nav');
+  if (nav._html !== menu) { nav.innerHTML = menu; nav._html = menu; }
   $('#quem').textContent = DEMO ? 'Modo demonstração' : EU.email;
   let html;
   try { html = VIEWS[pg](); }
@@ -537,8 +586,9 @@ function render() {
   $('#main').innerHTML = html;
   if (rolagens.some(x => x > 0)) { const novas = $$('#main .scroll'); if (novas.length === rolagens.length) novas.forEach((s, i) => { s.scrollLeft = rolagens[i]; }); }
   hidratarImagens($('#main'));
-  if (typeof ativarGraficos === 'function') ativarGraficos();
+  if (typeof ativarGraficos === 'function') ativarGraficos(trocou);
   if (VIEWS[pg] && typeof VIEWS[pg].depois === 'function') { try { VIEWS[pg].depois(); } catch (e) { console.error(e); } }
+  DEPOIS_RENDER.forEach(fn => { try { fn(trocou, pg); } catch (e) { console.error(e); } });
 }
 
 /* Pedaços de tela reutilizados pelas views */
@@ -663,6 +713,8 @@ function validarNumero(el) {
 }
 document.addEventListener('input', e => { if (e.target && e.target.dataset && e.target.dataset.num) validarNumero(e.target); }, true);
 const lerNumero = (el, c) => { const n = numTexto(el.value, c.tempo); return isFinite(n) ? n : 0; };
+/* Campo do formulário pelo nome, com namedItem: um campo chamado "item" ou "length" não se confunde com a lista. */
+const campoDoForm = (form, nome) => { const els = form && form.elements; return els ? (typeof els.namedItem === 'function' ? els.namedItem(nome) : els[nome]) : null; };
 function lerCampos(form, fields) {
   const o = {};
   fields.forEach(f => {
@@ -676,7 +728,8 @@ function lerCampos(form, fields) {
       return;
     }
     if (f.type === 'file') { o[f.k] = (FORM && FORM.files[f.k]) || null; return; }
-    const el = form.elements[f.k];
+    // namedItem: um campo chamado "item" ou "length" não pode ser confundido com o que a lista de campos já tem
+    const el = campoDoForm(form, f.k);
     if (!el) return;
     o[f.k] = f.type === 'check' ? el.checked : f.type === 'number' ? lerNumero(el, f) : el.value.trim();
   });
@@ -737,6 +790,8 @@ function openForm(o) {
     if (e.target.type !== 'file' || !e.target.files[0]) return;
     const box = e.target.closest('.filebox'), f = o.fields.find(x => x.k === box.dataset.file), file = e.target.files[0];
     e.target.value = '';
+    // f.aoEscolher(file, form): o campo pode ler o arquivo escolhido (ex.: peso e tempo do arquivo do fatiador) enquanto ele é enviado
+    if (typeof f.aoEscolher === 'function') Promise.resolve().then(() => f.aoEscolher(file, form)).catch(err => console.error(err));
     FORM.enviando++; $('.fname', box).textContent = 'Enviando ' + file.name + '…';
     const meuForm = FORM;
     try {
@@ -799,10 +854,18 @@ function fecharForm() {
 /* setCampo('preco', 12.5): altera um campo do formulário aberto e recalcula a prévia. */
 function setCampo(nome, valor) {
   if (!FORM || !FORM.form) return;
-  const el = FORM.form.elements[nome];
+  const el = campoDoForm(FORM.form, nome);
   if (!el) return;
   el.value = el.dataset && el.dataset.num ? paraCampo(valor) : valor;
   if (el.dataset && el.dataset.num) validarNumero(el);
+  FORM.sujo = true; FORM.atualizar();
+}
+/* setLinhas('materiais', [{ filamentoId, pesoG }]): troca todas as linhas de um campo de linhas do formulário aberto. */
+function setLinhas(k, linhas) {
+  if (!FORM || !FORM.form) return;
+  const f = FORM.o.fields.find(x => x.k === k), body = $(`[data-rows="${k}"] .rows-body`, FORM.form);
+  if (!f || !body) return;
+  body.innerHTML = (linhas || []).map(r => linhaHTML(f, r)).join('');
   FORM.sujo = true; FORM.atualizar();
 }
 document.addEventListener('keydown', e => {
