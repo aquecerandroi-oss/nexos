@@ -137,15 +137,22 @@ async function iniciarApp() {
   render();
   if (typeof visFecharAbertura === 'function') visFecharAbertura();
   if (typeof shopeeAoEntrar === 'function') shopeeAoEntrar();             // volta da autorização da loja na Shopee
-  DB.assinar(aplicarRemoto, recarregar);
+  DB.assinar(aplicarRemoto, primeira => (primeira ? conferirDesdeAbertura() : recarregar()));
   carregarEquipe();
 }
+let authSaindo = false;   // "Sair" em andamento: quem recarrega a página é o sair(), depois da resposta do servidor
 async function sair() {
   if (temPendencias() && !confirmar('Ainda há dados sendo salvos. Sair mesmo assim?')) return;
-  // signOut pode falhar sem internet e deixar a sessão guardada no aparelho; nesse caso apaga só a local
+  // Sai só deste aparelho: os outros PCs e o celular com a mesma conta continuam conectados (o padrão da biblioteca
+  // derrubaria todos). Espera o servidor encerrar a sessão (até 5 s). Sem internet, signOut falha e pode deixar a
+  // sessão guardada; nesse caso apaga a cópia deste navegador.
+  authSaindo = true;
   let erro = null;
-  try { erro = (await sb.auth.signOut()).error; } catch (e) { erro = e; }
-  if (erro) { try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { console.warn(e); } }
+  try {
+    const r = await Promise.race([sb.auth.signOut({ scope: 'local' }), new Promise(ok => setTimeout(() => ok({ error: new Error('sem resposta do servidor') }), 5000))]);
+    erro = r && r.error;
+  } catch (e) { erro = e; }
+  if (erro) { try { localStorage.removeItem(sb.auth.storageKey); } catch (e) { console.warn(e); } }
   location.reload();
 }
 async function boot() {
@@ -159,7 +166,7 @@ async function boot() {
   telaCarregando();
   try {
     const { data } = await sb.auth.getSession();
-    sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT' && $('#main')) setTimeout(() => location.reload(), 0); });
+    sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT' && $('#main') && !authSaindo) setTimeout(() => location.reload(), 0); });
     if (data && data.session) await aposLogin(data.session); else { telaLogin(); primeiraVisita(); }
   } catch (e) { console.error(e); telaLogin('entrar', 'Sem conexão com o servidor. Tente de novo.'); }
 }

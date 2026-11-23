@@ -460,7 +460,6 @@ body.modal-aberto .versao-nova{display:none}
   .auth-hero-in{display:none}
   .auth-painel{align-items:flex-start;padding:4px 16px 36px}
   .auth-card{padding:24px 20px 22px}
-  .doc-grid{grid-template-columns:1fr}
   body::after{opacity:.35}
 }
 @media (max-width:520px){ .btn{white-space:normal;text-align:center} .btn.sm{white-space:nowrap} }

@@ -164,15 +164,46 @@ const DBNuvem = {
       if (error) throw error;
     }
   },
-  assinar(cb, aoReconectar) {
-    let jaConectou = false;
+  /* Conferência leve depois da abertura: só a chave e o carimbo das linhas gravadas a partir de um instante, em
+     páginas de 1000. Devolve null quando não dá para paginar (mais de 1000 linhas com o mesmo carimbo). */
+  async carimbosDesde(iso) {
+    const vistos = new Map();
+    let desde = iso;
+    for (let pag = 0; pag < 20; pag++) {
+      const { data, error } = await sb.from('registros').select('colecao,id,atualizado_em').gte('atualizado_em', desde).order('atualizado_em').limit(1000);
+      if (error) throw error;
+      (data || []).forEach(r => vistos.set(r.colecao + '/' + r.id, r));
+      if (!data || data.length < 1000) return [...vistos.values()];
+      const ultimo = data[data.length - 1].atualizado_em;
+      if (ultimo === desde) return null;
+      desde = ultimo;
+    }
+    return null;
+  },
+  /* As linhas completas de algumas chaves ({ colecao, id }), uma consulta por coleção. */
+  async lerChaves(chaves) {
+    const porColecao = new Map(), out = [];
+    chaves.forEach(k => { if (!porColecao.has(k.colecao)) porColecao.set(k.colecao, []); porColecao.get(k.colecao).push(k.id); });
+    for (const [colecao, ids] of porColecao) {
+      const { data, error } = await sb.from('registros').select('colecao,id,dados,atualizado_em').eq('colecao', colecao).in('id', ids);
+      if (error) throw error;
+      out.push(...(data || []));
+    }
+    return out;
+  },
+  assinar(cb, aoConectar) {
+    let primeira = true;
     sb.channel('nexos-registros')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'registros' }, p => {
         if (p.eventType === 'DELETE') cb({ tipo: 'DELETE', colecao: p.old.colecao, id: p.old.id });
         else cb({ tipo: 'UPSERT', colecao: p.new.colecao, id: p.new.id, dados: p.new.dados, atualizado_em: p.new.atualizado_em });
       })
       .subscribe(status => {
-        if (status === 'SUBSCRIBED') { if (jaConectou) aoReconectar(); jaConectou = true; }
+        // o que outro aparelho gravou entre a leitura da abertura (ou durante uma queda) e a inscrição no canal não
+        // chega por ele: quem chamou confere (aoConectar(true) na primeira conexão, aoConectar(false) nas reconexões)
+        if (status !== 'SUBSCRIBED') return;
+        aoConectar(primeira);
+        primeira = false;
       });
   },
   async enviarArquivo(path, blob, tipo) {
@@ -309,6 +340,30 @@ function mostrarSync(estado) {
 window.addEventListener('online', () => { if (PEND.size || PEND_DEL.size) descarregar(); });
 window.addEventListener('beforeunload', e => { if (!saindoSemAcesso && (temPendencias() || (FORM && FORM.sujo))) { e.preventDefault(); e.returnValue = ''; } });
 
+/* Primeira conexão do canal ao vivo: o que outro aparelho gravou entre a leitura da abertura e a inscrição no canal
+   não chega por ele. Confere os carimbos das linhas gravadas desde a última gravação lida (com folga de 15 s), baixa
+   inteiras só as que estão mais novas no banco e aplica como se tivessem chegado pelo canal. Mudança demais ou erro:
+   relê tudo. (Uma exclusão feita nesse intervalo só aparece na próxima releitura completa.) */
+async function conferirDesdeAbertura() {
+  if (DEMO || typeof DB.carimbosDesde !== 'function') return;
+  let maior = 0;
+  VER.forEach(t => { if (t > maior) maior = t; });
+  try {
+    const carimbos = await DB.carimbosDesde(new Date(Math.max(0, maior - 15000)).toISOString());
+    if (!carimbos) return recarregar();
+    const mudou = carimbos.filter(r => {
+      const k = r.colecao + '/' + r.id, t = Date.parse(r.atualizado_em) || 0;
+      return !(VER.has(k) && t <= VER.get(k));
+    });
+    if (!mudou.length) return;
+    if (mudou.length > 300) return recarregar();
+    const linhas = await DB.lerChaves(mudou);
+    linhas.forEach(r => aplicarRemoto({ tipo: 'UPSERT', colecao: r.colecao, id: r.id, dados: r.dados, atualizado_em: r.atualizado_em }));
+  } catch (e) {
+    console.warn('Não foi possível conferir o que mudou na abertura', e);
+    recarregar();
+  }
+}
 let renderPendente = false, renderTimer = null;
 function aplicarRemoto(ev) {
   const k = ev.colecao + '/' + ev.id;
@@ -383,7 +438,7 @@ document.addEventListener('visibilitychange', () => {
 /* ---------- Versão nova publicada ----------
    Uma aba aberta continua na versão antiga até ser recarregada. Ao voltar para a aba (no máximo a cada 5 minutos) e a
    cada 30 minutos, confere o número da versão publicada e, se houver uma mais nova, oferece atualizar. */
-const VERSAO = 14;
+const VERSAO = 15;
 let avisouVersao = false, conferidoEm = 0;
 async function conferirVersao(forcar = false) {
   if (DEMO || avisouVersao || !$('#main') || (!forcar && Date.now() - conferidoEm < 5 * 60000)) return;
@@ -626,8 +681,9 @@ const confirmar = msg => window.confirm(msg);
 let FORM = null;
 /* Faz a janela se comportar como diálogo: o resto da tela fica inerte (teclado e leitor de tela não passam por trás)
    e o foco volta para onde estava quando ela fecha. */
-let focoAntes = null;
+let focoAntes = null, janelaAbertaEm = 0;
 function marcarJanela(m, titulo) {
+  janelaAbertaEm = Date.now();
   if (!focoAntes) focoAntes = document.activeElement;
   m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true'); m.setAttribute('aria-label', titulo || 'Janela');
   const app = $('#app'); if (app) app.inert = true;
@@ -874,22 +930,27 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('mousedown', e => {
   if (e.target.id !== 'modal' || e.offsetX >= e.target.clientWidth) return;      // clique na barra de rolagem não fecha
+  if (Date.now() - janelaAbertaEm < 600) return;                                 // o mesmo toque duplo que abriu a janela não a fecha
   if (FORM) { if (!FORM.sujo) fecharForm(); } else fecharModal();
 });
 
 /* ---------- Impressão (orçamento em PDF pelo "Salvar como PDF" do navegador) ---------- */
+/* Abre a impressão uma vez só, e só da impressão mais recente: a espera pelas imagens (ou um clique duplo) não
+   pode abrir uma segunda janela com a página já em branco. */
+let impressaoSeq = 0;
 function imprimir(html) {
-  const p = $('#print');
+  const meu = ++impressaoSeq, p = $('#print');
   p.innerHTML = html;
-  const limpar = () => { p.innerHTML = ''; window.removeEventListener('afterprint', limpar); };
+  const limpar = () => { window.removeEventListener('afterprint', limpar); if (meu === impressaoSeq) p.innerHTML = ''; };
   window.addEventListener('afterprint', limpar);
+  let feito = false;
+  const vai = () => { if (feito || meu !== impressaoSeq) return; feito = true; window.print(); };
   const imgs = $$('img', p).filter(i => !i.complete);
-  const vai = () => window.print();
   if (!imgs.length) return setTimeout(vai, 50);
   let n = imgs.length;
   const pronto = () => { if (--n <= 0) vai(); };
   imgs.forEach(i => { i.onload = pronto; i.onerror = pronto; });
-  setTimeout(() => { if (n > 0) { n = 0; vai(); } }, 2500);
+  setTimeout(vai, 2500);
 }
 async function copiarTexto(txt) {
   try { await navigator.clipboard.writeText(txt); toast('Texto copiado.'); }

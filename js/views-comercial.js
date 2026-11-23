@@ -489,6 +489,8 @@ VIEWS.orcamentos = function () {
   if (!S.orcamentos.length) {
     return topo + `<div class="panel">${vazio('Nenhum orçamento ainda. Crie o primeiro para enviar ao cliente em PDF ou pelo WhatsApp.', novo)}</div>`;
   }
+  // deixa a logo do PDF pronta enquanto a pessoa olha a lista: o primeiro PDF sai sem esperar a imagem
+  if (typeof pdfPrepararLogo === 'function') setTimeout(() => pdfPrepararLogo(S.perfil.logo), 400);
   const dia = hoje();
   const linhas = S.orcamentos.slice().sort((a, b) => num(b.numero) - num(a.numero) || String(b.data || '').localeCompare(String(a.data || ''))).map(o => {
     const itens = o.itens || [], status = comStatusOrc(o), t = totalOrcamento(o), contaSinal = comContaSinal(o);
@@ -681,42 +683,95 @@ function comVoltarTitulo() {
   if (comTituloAba !== null) document.title = comTituloAba;
   comTituloAba = null;
 }
-/* Abre a impressão do orçamento (no navegador: "Salvar como PDF"). */
-function comOrcamentoPDF(id) {
-  const o = byId('orcamentos', id);
-  if (!o) return;
+/* Quantidade e valor unitário do jeito que foram digitados (até 3 casas na quantidade; fração de centavo no
+   valor), para a conta de cada linha fechar no papel. */
+const comQtdTxt = q => nf(q, 3);
+const comPrecoTxt = v => {
+  const n = num(v);
+  return Math.abs(n * 100 - Math.round(n * 100)) > 1e-6 ? n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 4 }) : brl(n);
+};
+/* Tudo o que o documento do orçamento mostra, já formatado: o mesmo para o arquivo PDF e para a impressão. */
+function comDadosOrcamento(o) {
   const pf = S.perfil, empresa = pf.empresa || 'Nexos', cli = byId('clientes', o.clienteId), t = totalOrcamento(o);
   const nome = comClienteOrc(o), contato = cli ? [cli.telefone, cli.email].filter(Boolean).join(' · ') : '';
   const digitos = String(pf.cnpj || '').replace(/\D/g, '').length;
   const documento = pf.cnpj ? (digitos === 11 ? 'CPF ' : digitos === 14 ? 'CNPJ ' : 'CNPJ/CPF ') + pf.cnpj : '';
-  const dadosEmpresa = [`<b>${esc(empresa)}</b>`, esc(documento), esc(pf.telefone), esc(pf.email), esc(pf.cidade)].filter(Boolean).join('<br>');
+  return {
+    numero: String(o.numero ?? ''), emitido: dataBR(o.data), validade: o.validade ? dataBR(o.validade) : '',
+    empresa, empresaLinhas: [documento, pf.telefone, pf.email, pf.cidade].map(x => String(x || '').trim()).filter(Boolean),
+    logo: logoSegura(pf.logo),
+    cliente: nome, contato, prazo: o.prazo || '', pagamento: o.pagamento || '',
+    itens: (o.itens || []).map(i => {
+      const q = num(i.qtd), pu = num(i.precoUnit);
+      return { descricao: comDescItem(i), qtd: comQtdTxt(q), unit: comPrecoTxt(pu), total: brl(q * pu) };
+    }),
+    subtotal: brl(t.subtotal), desconto: t.desconto > 0 ? brl(-t.desconto) : '', total: brl(t.total),
+    sinal: t.sinal > 0 ? { rotulo: `Sinal para iniciar (${pct(t.sinalPct)})`, valor: brl(t.sinal), restante: brl(t.restante) } : null,
+    obs: o.obs || '',
+    rodape: [o.validade ? 'Orçamento válido até ' + dataBR(o.validade) : '', empresa, pf.telefone, pf.email].filter(Boolean).join(' · '),
+    titulo: `Orçamento ${o.numero}${nome ? ' - ' + nome : ''} - ${empresa}`,
+  };
+}
+/* O orçamento em HTML, para a impressão do navegador (o plano B quando o arquivo PDF não pode ser gerado). */
+function comOrcamentoHTML(d) {
   const bloco = (rotulo, valor) => `<div><span>${rotulo}</span>${esc(valor) || '—'}</div>`;
-  const linhas = (o.itens || []).map(i => {
-    const q = num(i.qtd), pu = num(i.precoUnit);
-    return `<tr><td>${esc(comDescItem(i))}</td><td class="right">${nf(q, 2)}</td><td class="right">${brl(pu)}</td><td class="right">${brl(q * pu)}</td></tr>`;
-  }).join('');
-  const rodape = [o.validade ? 'Orçamento válido até ' + dataBR(o.validade) : '', empresa, pf.telefone, pf.email].filter(Boolean).map(x => esc(x)).join(' · ');
-  const html = `<div class="doc">
-    <div class="doc-head">${logoSegura(pf.logo) ? `<img src="${esc(logoSegura(pf.logo))}" alt="">` : `<div class="doc-logo"><img src="img/logo.webp" alt="${esc(empresa)}"></div>`}<div class="doc-empresa">${dadosEmpresa}</div></div>
-    <h1 class="doc-titulo">Orçamento nº ${esc(o.numero)}</h1>
-    <div class="doc-sub">Emitido em ${esc(dataBR(o.data))}${o.validade ? ' · Válido até ' + esc(dataBR(o.validade)) : ''}</div>
-    <div class="doc-grid">${bloco('Cliente', nome)}${bloco('Contato', contato)}${bloco('Prazo de entrega', o.prazo)}${bloco('Forma de pagamento', o.pagamento)}</div>
+  const dadosEmpresa = [`<b>${esc(d.empresa)}</b>`, ...d.empresaLinhas.map(x => esc(x))].join('<br>');
+  const linhas = d.itens.map(i => `<tr><td>${esc(i.descricao)}</td><td class="right">${esc(i.qtd)}</td><td class="right">${esc(i.unit)}</td><td class="right">${esc(i.total)}</td></tr>`).join('');
+  return `<div class="doc">
+    <div class="doc-head">${d.logo ? `<img src="${esc(d.logo)}" alt="">` : `<div class="doc-logo"><img src="img/logo.webp" alt="${esc(d.empresa)}"></div>`}<div class="doc-empresa">${dadosEmpresa}</div></div>
+    <h1 class="doc-titulo">Orçamento nº ${esc(d.numero)}</h1>
+    <div class="doc-sub">Emitido em ${esc(d.emitido)}${d.validade ? ' · Válido até ' + esc(d.validade) : ''}</div>
+    <div class="doc-grid">${bloco('Cliente', d.cliente)}${bloco('Contato', d.contato)}${bloco('Prazo de entrega', d.prazo)}${bloco('Forma de pagamento', d.pagamento)}</div>
     <table><thead><tr><th>Descrição</th><th class="right">Qtd</th><th class="right">Valor un.</th><th class="right">Total</th></tr></thead><tbody>${linhas}</tbody></table>
     <div class="doc-total">
-      <div><span>Subtotal</span><span>${brl(t.subtotal)}</span></div>
-      ${t.desconto > 0 ? `<div><span>Desconto</span><span>${brl(-t.desconto)}</span></div>` : ''}
-      <div class="final"><span>Total</span><b>${brl(t.total)}</b></div>
-      ${t.sinal > 0 ? `<div><span>Sinal para iniciar (${pct(t.sinalPct)})</span><span>${brl(t.sinal)}</span></div>
-      <div><span>Restante na entrega</span><span>${brl(t.restante)}</span></div>` : ''}
+      <div><span>Subtotal</span><span>${esc(d.subtotal)}</span></div>
+      ${d.desconto ? `<div><span>Desconto</span><span>${esc(d.desconto)}</span></div>` : ''}
+      <div class="final"><span>Total</span><b>${esc(d.total)}</b></div>
+      ${d.sinal ? `<div><span>${esc(d.sinal.rotulo)}</span><span>${esc(d.sinal.valor)}</span></div>
+      <div><span>Restante na entrega</span><span>${esc(d.sinal.restante)}</span></div>` : ''}
     </div>
-    ${o.obs ? `<div class="doc-obs"><b>Observações</b><br>${esc(o.obs)}</div>` : ''}
-    <div class="doc-rodape">${rodape}</div>
+    ${d.obs ? `<div class="doc-obs"><b>Observações</b><br>${esc(d.obs)}</div>` : ''}
+    <div class="doc-rodape">${esc(d.rodape)}</div>
   </div>`;
+}
+/* Abre a impressão do orçamento (no navegador: "Salvar como PDF"). */
+function comOrcamentoImprimir(d) {
   // o navegador usa o título da aba como nome do arquivo PDF; ele volta ao normal quando a impressão fecha
   if (comTituloAba === null) comTituloAba = document.title;
-  document.title = `Orçamento ${o.numero}${nome ? ' - ' + nome : ''} - ${empresa}`;
+  document.title = d.titulo;
   window.addEventListener('afterprint', comVoltarTitulo, { once: true });
-  imprimir(html);
+  imprimir(comOrcamentoHTML(d));
+}
+let comGerandoPDF = null, comPdfUltimo = { id: '', em: 0 };
+/* Gera o arquivo PDF do orçamento e baixa (no celular, oferece enviar pelo WhatsApp e outros apps). Se este
+   navegador não conseguir montar o arquivo, abre a impressão, onde dá para escolher "Salvar como PDF".
+   Enquanto o arquivo é montado, o botão mostra "Gerando…" e os outros botões de PDF ficam desligados; o do mesmo
+   orçamento continua desligado mais 1 segundo (clique duplo gera um arquivo só). */
+async function comOrcamentoPDF(id) {
+  const o = byId('orcamentos', id);
+  if (!o || (comPdfUltimo.id === id && Date.now() - comPdfUltimo.em < 1000)) return;
+  if (comGerandoPDF) return toast(`Aguarde: o PDF do orçamento nº ${comGerandoPDF} ainda está sendo gerado.`);
+  comGerandoPDF = String(o.numero ?? '');
+  const botoes = $$('button[onclick^="comOrcamentoPDF"]'), botao = botoes.find(b => b.dataset.id === id);
+  botoes.forEach(b => { b.disabled = true; });
+  if (botao) { botao.setAttribute('aria-busy', 'true'); botao.textContent = 'Gerando…'; }
+  const d = comDadosOrcamento(o);
+  try {
+    const logo = await pdfPrepararLogo(d.logo);
+    pdfEntregar(pdfOrcamento(d, logo), pdfNomeArquivo(d.titulo), logo ? '' : '(A logo não carregou a tempo: o PDF saiu sem ela.)');
+  } catch (e) {
+    console.error('Não foi possível gerar o PDF do orçamento', e);
+    toast('Não deu para gerar o arquivo PDF neste navegador. Na janela que abrir, escolha "Salvar como PDF".', 'bad');
+    comOrcamentoImprimir(d);
+  } finally {
+    comGerandoPDF = null;
+    comPdfUltimo = { id, em: Date.now() };
+    botoes.forEach(b => { if (b !== botao) b.disabled = false; });
+    if (botao) {
+      botao.textContent = 'PDF'; botao.removeAttribute('aria-busy');
+      setTimeout(() => { botao.disabled = false; }, 1000);
+    }
+  }
 }
 /* Texto do orçamento para colar no WhatsApp (os asteriscos viram negrito lá). */
 function comTextoOrc(o) {
@@ -726,7 +781,7 @@ function comTextoOrc(o) {
   linhas.push('');
   (o.itens || []).forEach(i => {
     const q = num(i.qtd), pu = num(i.precoUnit);
-    linhas.push(`• ${nf(q, 2)}× ${comDescItem(i)} — ${brl(pu)} cada = ${brl(q * pu)}`);
+    linhas.push(`• ${comQtdTxt(q)}× ${comDescItem(i)} — ${comPrecoTxt(pu)} cada = ${brl(q * pu)}`);
   });
   linhas.push('', 'Subtotal: ' + brl(t.subtotal));
   if (t.desconto > 0) linhas.push('Desconto: ' + brl(-t.desconto));

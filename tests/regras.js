@@ -276,6 +276,63 @@
   ok('copiar fixos: copia a retirada do outro sócio', copiarFixos(mesAtual()) === 1, 0);
   S.lancamentos.filter(l => l.descricao === 'Retirada do mês').map(l => l.id).forEach(id => rm('lancamentos', id));
 
+  // 30. PDF do orçamento: arquivo de verdade, montado no navegador
+  ok('pdf: tabelas de largura completas', pdfLarguras.F1.length === 224 && pdfLarguras.F2.length === 224, [pdfLarguras.F1.length, pdfLarguras.F2.length]);
+  ok('pdf: acentos na WinAnsi', pdfCodificar('Orçamento nº 7 – São João') === 'Or\xe7amento n\xba 7 \x96 S\xe3o Jo\xe3o', pdfCodificar('Orçamento nº 7 – São João'));
+  const semWinAnsi = 'ŭ ﬁ 中' + String.fromCharCode(0x200b);
+  ok('pdf: fora da WinAnsi vira a letra simples ou ?', pdfCodificar(semWinAnsi) === 'u fi ?', pdfCodificar(semWinAnsi));
+  ok('pdf: emoji some do texto', pdfCodificar('Natal🎄✨👍🏽🇧🇷❤️!') === 'Natal!' && pdfCodificar('© ® ™') === '\xa9 \xae \x99', [pdfCodificar('Natal🎄✨👍🏽🇧🇷❤️!'), pdfCodificar('© ® ™')]);
+  ok('pdf: largura da Helvetica', perto(pdfMedir('Total', 'F2', 10), 23.89, 0.001) && perto(pdfMedir('R$ 1', 'F1', 10), 21.12, 0.001), [pdfMedir('Total', 'F2', 10), pdfMedir('R$ 1', 'F1', 10)]);
+  const textoLongo = 'Peça personalizada com nome gravado em relevo e acabamento pintado à mão '.repeat(3) + 'Supercalifragilisticexpialidocious'.repeat(3);
+  const quebradas = pdfQuebrar(textoLongo + '\n\nSegunda linha', 'F1', 10, 200);
+  ok('pdf: quebra respeita a largura', quebradas.length > 4 && quebradas.every(l => pdfMedir(l, 'F1', 10) <= 200.001), quebradas);
+  ok('pdf: quebra mantém as linhas digitadas', quebradas.slice(-2).join('|') === '|Segunda linha', quebradas.slice(-2));
+  ok('pdf: nome do arquivo sem caractere proibido', pdfNomeArquivo('Orçamento 7 - A/B: "C" <D>?') === 'Orçamento 7 - A-B- -C- -D-.pdf', pdfNomeArquivo('Orçamento 7 - A/B: "C" <D>?'));
+  const orcPdf = put('orcamentos', { id: 'orcpdf', numero: 99, data: hoje(), validade: addDias(hoje(), 7), clienteNome: 'Cliente (Teste) \\ PDF', prazo: '5 dias', pagamento: 'Pix', status: 'aberto', desconto: 5, sinalPct: 50,
+    obs: 'Linha 1\nLinha 2', itens: Array.from({ length: 70 }, (_, i) => ({ produtoId: '', descricao: 'Item ' + (i + 1) + ' com descrição', qtd: 1, precoUnit: 10 })) });
+  const dPdf = comDadosOrcamento(orcPdf);
+  ok('pdf: dados do orçamento', dPdf.total === brl(695) && dPdf.desconto === brl(-5) && dPdf.itens.length === 70 && !!dPdf.sinal && dPdf.sinal.valor === brl(347.5), dPdf);
+  const lerPdf = bytes => Array.from(bytes, b => String.fromCharCode(b)).join('');
+  const conferirPdf = (txt, nome) => {
+    const sx = Number((/startxref\n(\d+)\n%%EOF\n$/.exec(txt) || [])[1]);
+    const pos = txt.slice(sx).split('\n').slice(3).filter(l => / n $/.test(l)).map(l => Number(l.slice(0, 10)));
+    ok(nome + ': começo e fim do arquivo', txt.startsWith('%PDF-1.4\n') && txt.endsWith('%%EOF\n'), txt.slice(0, 12));
+    ok(nome + ': startxref aponta para a tabela', txt.slice(sx, sx + 5) === 'xref\n', sx);
+    ok(nome + ': cada objeto está onde a tabela diz', pos.length > 5 && pos.every((p, i) => txt.startsWith((i + 1) + ' 0 obj\n', p)), pos.slice(0, 6));
+    ok(nome + ': tamanho de cada stream confere', [...txt.matchAll(/\/Length (\d+) >>\nstream\n/g)].every(m => txt.startsWith('\nendstream', m.index + m[0].length + Number(m[1]))), 0);
+  };
+  const semLogo = lerPdf(pdfOrcamento(dPdf, null));
+  conferirPdf(semLogo, 'pdf sem logo');
+  const nPaginas = Number((/\/Count (\d+)/.exec(semLogo) || [])[1]);
+  ok('pdf: 70 itens viram mais de uma página', nPaginas >= 2 && (semLogo.match(/\/Type \/Page\b/g) || []).length === nPaginas && semLogo.includes('(P\xe1gina 2 de ' + nPaginas + ')'), nPaginas);
+  ok('pdf: parênteses e barra escapados', semLogo.includes('(Cliente \\(Teste\\) \\\\ PDF)'), 0);
+  const logoNexos = await pdfPrepararLogo('');
+  ok('pdf: logo da Nexos vira JPEG', !!logoNexos && logoNexos.dados.startsWith('\xff\xd8') && logoNexos.alturaPt === 60 && logoNexos.larguraPt > 60, logoNexos && [logoNexos.w, logoNexos.h]);
+  const telaLogo = document.createElement('canvas'); telaLogo.width = 400; telaLogo.height = 100;
+  telaLogo.getContext('2d').fillRect(0, 0, 40, 40);
+  const logoPropria = await pdfPrepararLogo(telaLogo.toDataURL('image/png'));
+  ok('pdf: logo do perfil cabe na caixa', !!logoPropria && logoPropria.larguraPt <= 170.001 && logoPropria.alturaPt <= 64.001, logoPropria && [logoPropria.larguraPt, logoPropria.alturaPt]);
+  const comLogo = lerPdf(pdfOrcamento(dPdf, logoNexos));
+  conferirPdf(comLogo, 'pdf com logo');
+  ok('pdf: logo entra como imagem JPEG', comLogo.includes('/Subtype /Image') && comLogo.includes('/DCTDecode') && comLogo.includes('/Im1 Do'), 0);
+  ok('pdf: símbolos com equivalente legível', pdfCodificar('≈ → ≤ ≥ ✓ ★ ⅓') === '~ -> <= >= \x95 * 1/3' && pdfCodificar('200 μm ⌀ ☐ ↑↓ ▲') === '200 \xb5m \xd8 [ ] ^v \x95',
+    [pdfCodificar('≈ → ≤ ≥ ✓ ★ ⅓'), pdfCodificar('200 μm ⌀ ☐ ↑↓ ▲')]);
+  const recuadas = pdfQuebrar('Itens:\n   - primeiro\n\t- segundo', 'F1', 10, 300);
+  ok('pdf: recuo das observações continua', recuadas.join('|') === 'Itens:|\xa0\xa0\xa0- primeiro|\xa0\xa0\xa0\xa0- segundo', recuadas);
+  ok('pdf: quantidade e valor como digitados', comQtdTxt(0.335) === '0,335' && comPrecoTxt(99.9) === brl(99.9) &&
+    comPrecoTxt(0.335) === (0.335).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 4 }), [comQtdTxt(0.335), comPrecoTxt(0.335)]);
+  ok('pdf: a logo fica pronta uma vez só', pdfPrepararLogo('') === pdfPrepararLogo(''), 0);
+  // item maior que uma página: continua nas seguintes (nada some) e a tabela não fica sozinha no fim da página 1
+  const itemGigante = 'COMECO-DO-ITEM ' + Array.from({ length: 160 }, (_, i) => 'Etapa ' + (i + 1) + ': modelagem, impressão e acabamento.').join(' ') + ' FIM-DO-ITEM';
+  const dGigante = { ...dPdf, itens: [{ descricao: itemGigante, qtd: '1', unit: brl(10), total: brl(10) }], obs: '',
+    rodape: Array.from({ length: 30 }, (_, i) => 'Contato número ' + (i + 1)).join(' · ') };
+  const gigante = lerPdf(pdfOrcamento(dGigante, null));
+  conferirPdf(gigante, 'pdf com item gigante');
+  const conteudos = [...gigante.matchAll(/<< \/Length (\d+) >>\nstream\n/g)].map(m => gigante.substr(m.index + m[0].length, Number(m[1])));
+  ok('pdf: item gigante começa na página 1 e sai inteiro', conteudos.length >= 3 && conteudos[0].includes('(COMECO-DO-ITEM') && gigante.includes('FIM-DO-ITEM)'), conteudos.length);
+  ok('pdf: rodapé comprido termina em … sem ponto solto', gigante.includes(' \x85)') && !/\xb7\) Tj/.test(gigante), 0);
+  rm('orcamentos', 'orcpdf');
+
   // 29. persistência
   await new Promise(r => setTimeout(r, 400));
   const foto = () => JSON.stringify([S.filamentos, S.produtos, S.vendas, S.ordens, S.insumos, S.lancamentos, S.contas, S.pessoas].map(l => [...l].sort((a, b) => a.id.localeCompare(b.id))));
