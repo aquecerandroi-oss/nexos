@@ -138,7 +138,7 @@ const DBNuvem = {
     const out = [], N = 1000, q = v => '"' + String(v).replace(/["\\]/g, '') + '"';   // valor entre aspas, sem aspas nem barras dentro
     let ultimo = null;
     for (;;) {
-      let c = sb.from('registros').select('colecao,id,dados,atualizado_em').order('colecao').order('id').limit(N);
+      let c = sb.from('registros').select('colecao,id,dados,atualizado_em,versao').order('colecao').order('id').limit(N);
       if (ultimo) c = c.or('colecao.gt.' + q(ultimo.colecao) + ',and(colecao.eq.' + q(ultimo.colecao) + ',id.gt.' + q(ultimo.id) + ')');
       const { data, error } = await c;
       if (error) throw error;
@@ -148,62 +148,81 @@ const DBNuvem = {
     }
     return out;
   },
-  async gravar(rows) {
-    const out = [];
-    for (let i = 0; i < rows.length; i += 200) {
-      const { data, error } = await sb.from('registros').upsert(rows.slice(i, i + 200), { onConflict: 'colecao,id' })
-        .select('colecao,id,atualizado_em');
+  /* Manda grupos de alterações para a função gravar do banco (supabase/gravacao.sql), que aplica cada grupo inteiro
+     ou nada e devolve como ficou cada registro. */
+  async gravarLote(grupos) {
+    // sem resposta em 45 s (rede pendurada): desiste e tenta de novo; o mesmo grupo reenviado não grava duas vezes
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null, t = ctl && setTimeout(() => ctl.abort(), 45000);
+    try {
+      let q = sb.rpc('gravar', { p_grupos: grupos });
+      if (ctl && typeof q.abortSignal === 'function') q = q.abortSignal(ctl.signal);
+      const { data, error } = await q;
       if (error) throw error;
-      out.push(...data);
-    }
-    return out;
+      return data;
+    } finally { clearTimeout(t); }
   },
-  async apagar(keys) {
-    for (const k of keys) {
-      const { error } = await sb.from('registros').delete().eq('colecao', k.colecao).eq('id', k.id);
+  /* O grupo já entrou no banco? (true ou false; erro quando não deu para saber) */
+  async grupoGravado(id) {
+    // sem resposta em 10 s (rede pendurada): desiste, e o grupo segue incerto (é reenviado inteiro, sem dividir)
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null, t = ctl && setTimeout(() => ctl.abort(), 10000);
+    try {
+      let q = sb.from('registros_grupos').select('id').eq('id', id).limit(1);
+      if (ctl && typeof q.abortSignal === 'function') q = q.abortSignal(ctl.signal);
+      const { data, error } = await q;
       if (error) throw error;
-    }
+      return Array.isArray(data) && data.length > 0;
+    } finally { clearTimeout(t); }
   },
-  /* Conferência leve depois da abertura: só a chave e o carimbo das linhas gravadas a partir de um instante, em
+  /* Conferência leve: só a chave, a versão e o carimbo do que foi gravado ou excluído a partir de um instante, em
      páginas de 1000. Devolve null quando não dá para paginar (mais de 1000 linhas com o mesmo carimbo). */
-  async carimbosDesde(iso) {
-    const vistos = new Map();
-    let desde = iso;
-    for (let pag = 0; pag < 20; pag++) {
-      const { data, error } = await sb.from('registros').select('colecao,id,atualizado_em').gte('atualizado_em', desde).order('atualizado_em').limit(1000);
-      if (error) throw error;
-      (data || []).forEach(r => vistos.set(r.colecao + '/' + r.id, r));
-      if (!data || data.length < 1000) return [...vistos.values()];
-      const ultimo = data[data.length - 1].atualizado_em;
-      if (ultimo === desde) return null;
-      desde = ultimo;
-    }
-    return null;
+  async mudancasDesde(iso) {
+    const paginar = async (tabela, campos, coluna) => {
+      const vistos = new Map();
+      let desde = iso;
+      for (let pag = 0; pag < 20; pag++) {
+        const { data, error } = await sb.from(tabela).select(campos).gte(coluna, desde).order(coluna).limit(1000);
+        if (error) throw error;
+        (data || []).forEach(r => vistos.set(r.colecao + '/' + r.id, r));
+        if (!data || data.length < 1000) return [...vistos.values()];
+        const ultimo = data[data.length - 1][coluna];
+        if (ultimo === desde) return null;
+        desde = ultimo;
+      }
+      return null;
+    };
+    const linhas = await paginar('registros', 'colecao,id,versao,atualizado_em', 'atualizado_em');
+    const apagados = linhas && await paginar('registros_apagados', 'colecao,id,versao,apagado_em', 'apagado_em');
+    return linhas && apagados ? { linhas, apagados } : null;
   },
   /* As linhas completas de algumas chaves ({ colecao, id }), uma consulta por coleção. */
   async lerChaves(chaves) {
     const porColecao = new Map(), out = [];
     chaves.forEach(k => { if (!porColecao.has(k.colecao)) porColecao.set(k.colecao, []); porColecao.get(k.colecao).push(k.id); });
     for (const [colecao, ids] of porColecao) {
-      const { data, error } = await sb.from('registros').select('colecao,id,dados,atualizado_em').eq('colecao', colecao).in('id', ids);
-      if (error) throw error;
-      out.push(...(data || []));
+      for (let i = 0; i < ids.length; i += 100) {
+        const { data, error } = await sb.from('registros').select('colecao,id,dados,atualizado_em,versao').eq('colecao', colecao).in('id', ids.slice(i, i + 100));
+        if (error) throw error;
+        out.push(...(data || []));
+      }
     }
     return out;
   },
-  assinar(cb, aoConectar) {
-    let primeira = true;
+  /* Canal ao vivo: gravações (inclusões e alterações) e exclusões (pela marca que cada exclusão deixa, com a versão:
+     um aviso atrasado não apaga o que foi criado de novo depois). aoConectar a cada conexão; aoCair quando cai. */
+  assinar(cb, aoConectar, aoCair) {
+    const linha = r => ({ tipo: 'UPSERT', colecao: r.colecao, id: r.id, dados: r.dados, versao: r.versao, atualizado_em: r.atualizado_em });
     sb.channel('nexos-registros')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'registros' }, p => {
-        if (p.eventType === 'DELETE') cb({ tipo: 'DELETE', colecao: p.old.colecao, id: p.old.id });
-        else cb({ tipo: 'UPSERT', colecao: p.new.colecao, id: p.new.id, dados: p.new.dados, atualizado_em: p.new.atualizado_em });
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'registros' }, p => cb(linha(p.new)))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'registros' }, p => cb(linha(p.new)))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'registros_apagados' }, p => {
+        // antes da resposta do canal, a biblioteca entrega a este filtro ("*") qualquer aviso: só vale o da marca
+        if (p.table && p.table !== 'registros_apagados') return;
+        const a = p.new;
+        if (a && a.colecao) cb({ tipo: 'DELETE', colecao: a.colecao, id: a.id, versao: a.versao, apagado_em: a.apagado_em });
       })
       .subscribe(status => {
-        // o que outro aparelho gravou entre a leitura da abertura (ou durante uma queda) e a inscrição no canal não
-        // chega por ele: quem chamou confere (aoConectar(true) na primeira conexão, aoConectar(false) nas reconexões)
-        if (status !== 'SUBSCRIBED') return;
-        aoConectar(primeira);
-        primeira = false;
+        if (status === 'SUBSCRIBED') aoConectar();
+        else if (typeof aoCair === 'function') aoCair(status);
       });
   },
   async enviarArquivo(path, blob, tipo) {
@@ -227,13 +246,24 @@ const DBNuvem = {
     if (error) throw error;
   },
 };
-const DEMO_KEY = 'nexos-demo-v2';
+/* Demonstração: o "banco" fica no navegador, com as mesmas regras da função gravar (js/banco-local.js). */
+const DEMO_KEY = 'nexos-demo-v3';
 const demoBlobs = new Map();
 const DBDemo = {
-  _ler() { try { return JSON.parse(localStorage.getItem(DEMO_KEY)) || {}; } catch (e) { return {}; } },
-  async carregar() { const m = this._ler(); return Object.keys(m).map(k => { const [colecao, ...r] = k.split('/'); return { colecao, id: r.join('/'), dados: m[k], atualizado_em: null }; }); },
-  async gravar(rows) { const m = this._ler(); rows.forEach(r => { m[r.colecao + '/' + r.id] = JSON.parse(JSON.stringify(r.dados)); }); localStorage.setItem(DEMO_KEY, JSON.stringify(m)); return rows.map(r => ({ colecao: r.colecao, id: r.id, atualizado_em: new Date().toISOString() })); },
-  async apagar(keys) { const m = this._ler(); keys.forEach(k => { delete m[k.colecao + '/' + k.id]; }); localStorage.setItem(DEMO_KEY, JSON.stringify(m)); },
+  _ler() {
+    try { const e = JSON.parse(localStorage.getItem(DEMO_KEY)); if (e && typeof e === 'object' && e.linhas) return e; } catch (e) { /* vazio ou estragado */ }
+    return { seq: 0, linhas: {}, apagados: {}, grupos: {} };
+  },
+  async carregar() {
+    const e = this._ler();
+    return Object.keys(e.linhas).map(k => { const j = k.indexOf('/'), l = e.linhas[k]; return { colecao: k.slice(0, j), id: k.slice(j + 1), dados: l.d, atualizado_em: l.e, versao: l.v }; });
+  },
+  async gravarLote(grupos) {
+    const e = this._ler(), r = bancoGravar(e, copia(grupos), new Date().toISOString());
+    localStorage.setItem(DEMO_KEY, JSON.stringify(e));
+    return r;
+  },
+  async grupoGravado(id) { return !!this._ler().grupos[id]; },
   assinar() {},
   async enviarArquivo(path, blob) { demoBlobs.set(path, URL.createObjectURL(blob)); },
   async urlsArquivos(paths) { const m = {}; paths.forEach(p => { if (demoBlobs.has(p)) m[p] = demoBlobs.get(p); }); return m; },
@@ -242,80 +272,501 @@ const DBDemo = {
 };
 const DB = DEMO ? DBDemo : DBNuvem;
 
-/* ---------- Sincronização: gravação em lote + mudanças vindas de outros aparelhos ---------- */
-const PEND = new Map(), PEND_DEL = new Map(), EM_VOO = new Set(), VER = new Map();
-let salvando = false, flushTimer = null, retryTimer = null, tentativas = 0, syncEstado = 'ok', avisarFalha = false;
+/* ---------- Sincronização (dois ou mais aparelhos ao mesmo tempo) ----------
+   O que cada clique muda vira um GRUPO de alterações: campos trocados, campos removidos, somas de estoque e a média do
+   preço de compra — nunca o registro inteiro. A função gravar do banco aplica cada grupo inteiro ou nada, sobre a
+   versão mais nova: o estoque é somado lá, campo que este aparelho não mexeu não é regravado, e pedido, ordem, conta,
+   orçamento, compra, falha, lançamento e manutenção só mudam se ninguém mudou antes (se mudou, o grupo volta, a tela
+   mostra como ficou e um aviso explica). A tela mostra sempre a versão do banco (BASE) com os grupos ainda não
+   confirmados reaplicados por cima: o que chega de outro aparelho entra na hora, menos num registro com gravação
+   daqui ainda sem resposta (esse espera a resposta, ver chaveIncerta). */
+const BASE = new Map();          // 'colecao/id' -> { d: dados como estão no banco (cópia só daqui), v: versão }
+const APAGADOS = new Map();      // 'colecao/id' -> versão da exclusão (um aviso mais velho não ressuscita o registro)
+const FILA = [];                 // grupos ainda não enviados, na ordem em que aconteceram
+let VOO = [];                    // grupos enviados, esperando a resposta
+const RESULTADOS = new Map();    // número do grupo -> { ok, versoes } (para os grupos seguintes que dependem dele)
+const ESPERA = new Map();        // 'colecao/id' -> { l, x }: aviso de outro aparelho (linha e exclusão mais novas) à espera do resultado de um grupo daqui
+const DA_TELA = new WeakSet();   // objetos que já estiveram na tela (reconhece a edição atrasada de algo já excluído)
+const ULTIMO_VISTO = new Map();  // 'colecao/id' -> como o registro estava quando saiu da tela (o nome no aviso de uma recusa)
+const SESSAO = uid();
+let grupoAtual = null, seqGrupo = 0, MARCA_LIDA = 0, FORM_SALVANDO = null;
+let flushTimer = null, retryTimer = null, tentativas = 0, syncEstado = 'ok', avisarFalha = false;
+/* Estoque: somado ou subtraído no banco, nunca regravado com o número que este aparelho calculou. */
+const CONTADORES = { produtos: ['estoque'], filamentos: ['estoqueG'], insumos: ['estoque'] };
+/* Movimentos: só mudam (ou saem) se ninguém mudou antes. Os cadastros mesclam campo a campo. */
+const COM_VERSAO = new Set(['ordens', 'vendas', 'contas', 'orcamentos', 'compras', 'falhas', 'lancamentos', 'manutHist']);
+const copia = v => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+/* Valores iguais (texto, número, sim/não, listas e objetos), como ficariam gravados. */
+function iguais(a, b) {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && a.every((x, i) => iguais(x, b[i]));
+  const ka = Object.keys(a), kb = Object.keys(b);
+  return ka.length === kb.length && ka.every(k => Object.prototype.hasOwnProperty.call(b, k) && iguais(a[k], b[k]));
+}
+/* Deixa alvo com o mesmo conteúdo de fonte, sem trocar o objeto (quem guardou a referência continua vendo o certo). */
+function igualar(alvo, fonte) {
+  Object.keys(alvo).forEach(k => { if (!Object.prototype.hasOwnProperty.call(fonte, k)) delete alvo[k]; });
+  Object.keys(fonte).forEach(k => { alvo[k] = fonte[k]; });
+}
 
-function put(col, rec) {
+/* Como o registro aparece aqui: a versão do banco com os grupos ainda não confirmados aplicados por cima. */
+function aplicarOp(d, op) {
+  let r;
+  if (op.t === 'novo') r = d || bancoAplicarPassos(copia(op.d), op.p);
+  else if (op.t === 'mudar') r = d ? bancoAplicarPassos(d, op.p) : null;
+  else if (op.t === 'mesclar') r = bancoAplicarPassos(d || {}, op.p);
+  else if (op.t === 'trocar') r = bancoAplicarPassos(copia(op.d), op.p);
+  else r = null;
+  if (r && op.c !== 'meta') r.id = op.i;
+  return r;
+}
+function vistaDe(k) {
+  const b = BASE.get(k);
+  let d = b ? copia(b.d) : null;
+  VOO.forEach(g => { const op = g.ops.get(k); if (op) d = aplicarOp(d, op); });
+  FILA.forEach(g => { const op = g.ops.get(k); if (op) d = aplicarOp(d, op); });
+  return d;
+}
+function colocarNaTela(col, id, vista, rec) {
+  const lista = S[col];
+  if (!Array.isArray(lista)) return;
+  const i = lista.findIndex(x => x.id === id);
+  if (!vista || !registroValido(vista) || vista.id !== id) {
+    if (i >= 0) {
+      const k = col + '/' + id;
+      ULTIMO_VISTO.delete(k); ULTIMO_VISTO.set(k, copia(lista[i]));
+      if (ULTIMO_VISTO.size > 200) ULTIMO_VISTO.delete(ULTIMO_VISTO.keys().next().value);
+      lista.splice(i, 1);
+    }
+    return;
+  }
+  const alvo = rec && typeof rec === 'object' ? rec : i >= 0 ? lista[i] : null;
+  if (!alvo) { lista.push(vista); DA_TELA.add(vista); return; }
+  if (!iguais(copia(alvo), vista)) igualar(alvo, vista);
+  if (i < 0) lista.push(alvo); else if (lista[i] !== alvo) lista[i] = alvo;
+  DA_TELA.add(alvo);
+}
+function metaNaTela(qual, vista) {
+  if (qual === 'config') igualar(S.config, { ...CONFIG_PADRAO, ...soSimples(vista) });
+  else if (qual === 'perfil') igualar(S.perfil, perfilLimpo(vista));
+}
+function refazerVista(k) {
+  const j = k.indexOf('/'), col = k.slice(0, j), id = k.slice(j + 1);
+  if (col === 'meta') metaNaTela(id, vistaDe(k)); else colocarNaTela(col, id, vistaDe(k), null);
+}
+
+/* Grupo do clique atual: tudo o que é gravado no mesmo instante (até o próximo await) entra junto. */
+function grupoAberto() {
+  if (!grupoAtual) {
+    const g = grupoAtual = { n: ++seqGrupo, id: SESSAO + '-' + seqGrupo, ops: new Map() };
+    FILA.push(g);
+    queueMicrotask(() => {
+      if (grupoAtual === g) grupoAtual = null;
+      if (!g.ops.size) { const i = FILA.indexOf(g); if (i >= 0) FILA.splice(i, 1); }
+    });
+  }
+  return grupoAtual;
+}
+/* Fecha o grupo atual: o que vier depois forma outro grupo, que entra (ou volta) sozinho. Ex.: cada pedido da Shopee. */
+function novoGrupo() { if (grupoAtual && grupoAtual.ops.size) grupoAtual = null; }
+function ultimoGrupoCom(k, exceto) {
+  for (let i = FILA.length - 1; i >= 0; i--) if (FILA[i] !== exceto && FILA[i].ops.has(k)) return FILA[i];
+  for (let i = VOO.length - 1; i >= 0; i--) if (VOO[i].ops.has(k)) return VOO[i];
+  return null;
+}
+/* Versão em que o registro precisa estar para a mudança valer: a do banco ou a que um grupo anterior vai gravar. */
+function precondicao(k, g) {
+  const anterior = ultimoGrupoCom(k, g);
+  if (anterior) return { seGrupo: anterior.n };
+  const b = BASE.get(k);
+  return b ? { se: b.v } : {};
+}
+/* O que mudou de antes para novo. form (salvando um formulário): campo igual ao de quando a janela abriu = a pessoa
+   não mexeu nele, e vale o valor mais novo (que pode ter vindo de outro aparelho). Estoque vira soma; o preço médio
+   de uma compra vai como média, para o banco calcular com o estoque de lá. */
+/* Campos que o op do grupo já mexeu (o salvamento de uma janela pode gravar o mesmo registro mais de uma vez). */
+function jaMexidos(op) {
+  const ja = new Set();
+  if (!op) return ja;
+  (op.p || []).forEach(p => {
+    ['s', 'a', 'e'].forEach(c => Object.keys(p[c] || {}).forEach(k => ja.add(k)));
+    (p.x || []).forEach(k => ja.add(k));
+    (p.m || []).forEach(m => { ja.add(m.p); ja.add(m.q); });
+  });
+  if (op.d) Object.keys(op.d).forEach(k => ja.add(k));
+  return ja;
+}
+/* op: o que o grupo já tem deste registro. Nas gravações seguintes do mesmo salvamento, a regra do formulário vale para
+   os campos que as anteriores ainda não mexeram (ex.: editar uma ordem já impressa reabre e conclui de novo; a
+   observação que a pessoa não tocou não volta ao valor de quando a janela abriu). */
+function diferenca(col, antes, novo, opts, form, op) {
+  const s = {}, x = [], a = {}, e = {}, conts = CONTADORES[col] || [], medias = opts.media ? [].concat(opts.media) : [];
+  const snap = form && form.snap, ja = jaMexidos(op);
+  new Set([...Object.keys(antes), ...Object.keys(novo)]).forEach(k => {
+    if (k === 'id') return;
+    const va = antes[k], vn = novo[k];
+    if (iguais(va, vn)) return;
+    if (snap && !ja.has(k) && iguais(vn, snap[k])) return;
+    if (medias.some(m => m.p === k)) return;
+    if (conts.includes(k)) {
+      // estoque digitado no formulário: vale o número digitado, mas só se o banco ainda estiver com o que a janela
+      // mostrava ao abrir (outra correção ou movimento no meio: o grupo volta, em vez de somar uma correção na outra)
+      if (snap && !op) { s[k] = vn === undefined ? 0 : vn; e[k] = k in snap ? snap[k] : null; return; }
+      const delta = bancoArred(num(vn) - num(va), 6);
+      if (delta) a[k] = delta;
+      return;
+    }
+    if (vn === undefined) x.push(k); else s[k] = vn;
+  });
+  const p = {};
+  if (Object.keys(e).length) p.e = e;
+  if (medias.length) p.m = medias.map(m => ({ ...m }));
+  if (Object.keys(s).length) p.s = s;
+  if (x.length) p.x = x;
+  if (Object.keys(a).length) p.a = a;
+  return Object.keys(p).length ? p : null;
+}
+function registrarMudanca(g, col, id, antes, novo, opts, form) {
+  const k = col + '/' + id, op = g.ops.get(k);
+  if (opts.trocar) { g.ops.set(k, { c: col, i: id, t: 'trocar', d: novo, p: [] }); return; }
+  if (!antes) {
+    if (op && op.t === 'apagar') { op.t = 'trocar'; op.d = novo; op.p = []; return; }   // apagou e recriou no mesmo clique
+    g.ops.set(k, { c: col, i: id, t: 'novo', d: novo, p: [], ...(opts.seExistir === 'ignorar' ? { modo: 'ignorar' } : {}) });
+    return;
+  }
+  const passo = diferenca(col, antes, novo, opts, form, op);
+  if (!passo) return;
+  if (op) { if (op.t === 'novo' || op.t === 'trocar') op.d = novo; else op.p.push(passo); return; }
+  const pre = COM_VERSAO.has(col) ? (form && form.pre ? form.pre : precondicao(k, g)) : {};
+  g.ops.set(k, { c: col, i: id, t: 'mudar', p: [passo], ...pre });
+}
+const NOME_REG = { canais: 'o canal de venda', filamentos: 'o filamento', fornecedores: 'o fornecedor', compras: 'a compra de filamento',
+  insumos: 'o insumo', produtos: 'o produto', ordens: 'a ordem de produção', vendas: 'o pedido', clientes: 'o cliente',
+  orcamentos: 'o orçamento', falhas: 'o registro de falha', manutItens: 'o item de manutenção', manutHist: 'a manutenção',
+  lancamentos: 'o lançamento', pessoas: 'a pessoa', contas: 'a conta', meta: 'a configuração' };
+function descricaoRegistro(col, d) {
+  d = d || {};
+  const txt = v => '“' + String(v).slice(0, 50) + '”';
+  if ((col === 'vendas' || col === 'orcamentos') && d.numero) return NOME_REG[col] + ' nº ' + d.numero;
+  if (col === 'ordens') { const p = byId('produtos', d.produtoId); return NOME_REG.ordens + (p ? ` de ${nf(d.qtd)}× ${p.nome}` : ''); }
+  if ((col === 'contas' || col === 'lancamentos' || col === 'manutHist') && d.descricao) return NOME_REG[col] + ' ' + txt(d.descricao);
+  return (NOME_REG[col] || 'o registro') + (d.nome ? ' ' + txt(d.nome) : '');
+}
+const maiuscula = t => t.charAt(0).toUpperCase() + t.slice(1);
+/* Formulário de um registro que outro aparelho excluiu enquanto a janela estava aberta: não grava nada. */
+function recusarEdicaoApagada(col, id, g, antigo) {
+  descartarGrupo(g);
+  const msg = `Outro aparelho excluiu ${descricaoRegistro(col, antigo)} enquanto ele estava aberto aqui. Nada foi gravado.`;
+  toast(msg, 'bad');
+  const e = new Error(msg); e.jaAvisado = true;
+  throw e;
+}
+function descartarGrupo(g) {
+  const i = FILA.indexOf(g);
+  if (i >= 0) FILA.splice(i, 1);
+  if (grupoAtual === g) grupoAtual = null;
+  RESULTADOS.set(g.n, { ok: false });
+  [...g.ops.keys()].forEach(refazerVista);
+  REV++; pedirRender();
+}
+
+/* put(colecao, registro, opções): grava o registro (novo ou alterado). A tela muda na hora; o banco recebe só o que
+   mudou. Opções: media ({ p: campo do preço, q: campo do estoque, n: quantidade, v: valor pago, e: escala, k: casas }),
+   seExistir: 'ignorar' (código fixo: se outro aparelho já criou, fica o dele), trocar (restauração de backup). */
+function put(col, rec, opts = {}) {
   const lista = S[col];
   if (!lista) throw new Error('Coleção desconhecida: ' + col);
   if (!rec.id) rec.id = uid();
-  const i = lista.findIndex(x => x.id === rec.id);
-  if (i >= 0) lista[i] = rec; else lista.push(rec);
-  const k = col + '/' + rec.id;
-  PEND_DEL.delete(k);
-  PEND.set(k, { colecao: col, id: rec.id, dados: rec });
+  const id = String(rec.id);
+  if (!ID_OK.test(id)) throw new Error('Código de registro inválido: ' + id);
+  const k = col + '/' + id;
+  let g = grupoAberto();
+  if (opts.trocar && g.ops.size >= 100 && !g.ops.has(k)) { novoGrupo(); g = grupoAberto(); }   // restauração grande vai em partes
+  // salvando a janela deste registro: vale só o que a pessoa mexeu desde que ela abriu (ver diferenca)
+  const form = FORM_SALVANDO && FORM_SALVANDO.k === k ? FORM_SALVANDO : null;
+  const antes = vistaDe(k);
+  if (!antes && !opts.trocar && ((form && !g.ops.has(k)) || (DA_TELA.has(rec) && APAGADOS.has(k)))) recusarEdicaoApagada(col, id, g, form ? form.snap : rec);
+  const novo = copia(rec);
+  novo.id = id;
+  registrarMudanca(g, col, id, antes, novo, opts, form);
+  acompanharJanela(k, g);
+  colocarNaTela(col, id, vistaDe(k), rec);
   REV++; agendarGravacao();
-  return rec;
+  return byId(col, id) || rec;
+}
+/* Este aparelho mexeu (fora do salvamento da janela) no registro que a janela aberta edita: ex.: o acerto automático do
+   número do pedido na conta. A janela passa a esperar a versão que esse grupo vai gravar, para não ver a mudança do
+   próprio aparelho como se fosse de outro. */
+function acompanharJanela(k, g) {
+  if (FORM && FORM.registro && FORM.registro.k === k && FORM_SALVANDO !== FORM.registro && FORM.registro.pre && g.ops.has(k)) {
+    FORM.registro.pre = { seGrupo: g.n };
+  }
 }
 function rm(col, id) {
-  const lista = S[col];
-  const i = lista.findIndex(x => x.id === id);
-  if (i >= 0) lista.splice(i, 1);
-  const k = col + '/' + id;
-  PEND.delete(k);
-  PEND_DEL.set(k, { colecao: col, id });
+  if (!S[col]) throw new Error('Coleção desconhecida: ' + col);
+  id = String(id);
+  const k = col + '/' + id, g = grupoAberto(), op = g.ops.get(k);
+  if (op && op.t === 'novo') g.ops.delete(k);                       // criado e apagado no mesmo clique: nada vai ao banco
+  else if (op) { op.t = 'apagar'; op.p = []; delete op.d; delete op.modo; }
+  else if (BASE.has(k) || ultimoGrupoCom(k, g)) g.ops.set(k, { c: col, i: id, t: 'apagar', p: [], ...(COM_VERSAO.has(col) ? precondicao(k, g) : {}) });
+  acompanharJanela(k, g);
+  colocarNaTela(col, id, vistaDe(k), null);
   REV++; agendarGravacao();
 }
-function saveMeta(qual) {
-  PEND.set('meta/' + qual, { colecao: 'meta', id: qual, dados: S[qual] });
+/* Configuração e perfil: grava só os campos que mudaram (tudo = true grava todos, no primeiro uso). */
+function saveMeta(qual, opts = {}) {
+  const k = 'meta/' + qual, g = grupoAberto(), bruto = vistaDe(k) || {};
+  const antes = opts.tudo ? {} : qual === 'config' ? { ...CONFIG_PADRAO, ...soSimples(bruto) } : perfilLimpo(bruto);
+  const passo = diferenca('meta', antes, copia(S[qual]), {}, null);
+  if (passo) {
+    const op = g.ops.get(k);
+    if (op) op.p.push(passo); else g.ops.set(k, { c: 'meta', i: qual, t: 'mesclar', p: [passo] });
+  }
+  metaNaTela(qual, vistaDe(k));
   REV++; agendarGravacao();
 }
-const temPendencias = () => PEND.size > 0 || PEND_DEL.size > 0 || salvando;
+/* O registro já chegou ao banco? (sem internet, um pedido ou orçamento novo ainda pode mudar de número) */
+const confirmadoNoBanco = (col, id) => BASE.has(col + '/' + id);
+const temPendencias = () => VOO.length > 0 || FILA.some(g => g.ops.size > 0);
 function agendarGravacao() { avisarFalha = true; if (!flushTimer) flushTimer = setTimeout(descarregar, 40); }
+
+/* Versão de um registro depois de um grupo já respondido (-1 = o grupo o excluiu); undefined = ainda sem resposta. */
+function versaoDepois(op) {
+  if (op.seGrupo === undefined) return op.se;
+  const r = RESULTADOS.get(op.seGrupo), k = op.c + '/' + op.i;
+  if (r) return r.ok && r.versoes.has(k) ? r.versoes.get(k) : null;
+  return VOO.concat(FILA).some(g => g.n === op.seGrupo) ? undefined : null;
+}
+const esperandoOutro = op => op.seGrupo !== undefined && versaoDepois(op) === undefined;
+/* Quantas alterações cabem numa chamada ao banco. O banco corta a chamada que passa de 8 s: se isso acontecer, o lote
+   seguinte vai menor (e um grupo grande de restauração, cujas partes não dependem umas das outras, é dividido). Se o
+   lote cortado usava mais da metade do limite que valia antes dessa sequência de cortes, o tamanho pode ser a causa, e
+   os lotes não passam de 3/4 dele (tetoOps). Corte de um lote pequeno (ou cortes seguidos de uma mesma trava) só
+   diminui os próximos. E o teto volta a subir quando o banco grava de fato, nesta chamada, pelo menos metade dele em
+   menos de 2 s (um quarto do tempo do banco, sem contar a demora da rede, medida nas gravações pequenas; reenvio que
+   volta "ja" e grupo recusado não contam): a lentidão era de momento, não do tamanho. */
+let limiteOps = 300, tetoOps = 300, limiteAntesDosCortes = 0, idas = [];
+const soSubstituicoes = g => g.ops.size > 1 && [...g.ops.values()].every(op => op.t === 'trocar' || op.t === 'mesclar');
+function dividirGrupo(g) {
+  const ops = [...g.ops.entries()], meio = Math.ceil(ops.length / 2), i = FILA.indexOf(g);
+  const parte = lista => { const n = ++seqGrupo; return { n, id: SESSAO + '-' + n, ops: new Map(lista) }; };
+  if (i < 0) return;
+  const p1 = parte(ops.slice(0, meio)), p2 = parte(ops.slice(meio)), qual = k => (p1.ops.has(k) ? p1.n : p2.n);
+  FILA.splice(i, 1, p1, p2);
+  // quem esperava o grupo inteiro passa a esperar a parte que tem o seu registro
+  FILA.forEach(h => h.ops.forEach((op, k) => { if (op.seGrupo === g.n) op.seGrupo = qual(k); }));
+  if (FORM && FORM.registro && FORM.registro.pre && FORM.registro.pre.seGrupo === g.n) FORM.registro.pre = { seGrupo: qual(FORM.registro.k) };
+}
 async function descarregar() {
   flushTimer = null;
-  if (salvando || (!PEND.size && !PEND_DEL.size)) return;
-  salvando = true;
+  if (VOO.length) return;                                            // um lote por vez
   clearTimeout(retryTimer);
-  const up = [...PEND.values()], del = [...PEND_DEL.values()];
-  PEND.clear(); PEND_DEL.clear();
-  up.forEach(r => EM_VOO.add(r.colecao + '/' + r.id));
-  del.forEach(r => EM_VOO.add(r.colecao + '/' + r.id));
-  mostrarSync('salvando');
-  let ok = false, semPermissao = false;
-  try {
-    if (up.length) {
-      const res = await DB.gravar(up);
-      res.forEach(r => VER.set(r.colecao + '/' + r.id, Date.parse(r.atualizado_em) || Date.now()));
-    }
-    if (del.length) {
-      await DB.apagar(del);
-      del.forEach(r => VER.delete(r.colecao + '/' + r.id));
-    }
-    ok = true; tentativas = 0;
-  } catch (e) {
-    console.error('Falha ao salvar na nuvem', e);
-    // devolve para a fila o que não foi salvo, sem passar por cima de mudanças mais novas
-    up.forEach(r => { const k = r.colecao + '/' + r.id; if (!PEND.has(k) && !PEND_DEL.has(k)) PEND.set(k, r); });
-    del.forEach(r => { const k = r.colecao + '/' + r.id; if (!PEND.has(k) && !PEND_DEL.has(k)) PEND_DEL.set(k, r); });
-    semPermissao = !!e && e.code === '42501';                               // o banco recusou: a regra de acesso não deixou gravar
+  // grupos feitos em cima de um grupo que não foi gravado também não valem (um grupo já enviado uma vez saiu com o que
+  // esperava resolvido, e só a resposta dele diz o que aconteceu)
+  const perdidos = [];
+  for (let i = 0; i < FILA.length; i++) {
+    const g = FILA[i];
+    if (g === grupoAtual) continue;
+    if (!g.ops.size) { FILA.splice(i--, 1); continue; }
+    if (!g.enviado && [...g.ops.values()].some(op => versaoDepois(op) === null)) { FILA.splice(i--, 1); RESULTADOS.set(g.n, { ok: false }); perdidos.push(g); }
   }
-  EM_VOO.clear();
-  salvando = false;
-  if (ok) {
-    if (PEND.size || PEND_DEL.size) agendarGravacao();
-    else { mostrarSync('ok'); if (recarregarDepois) { recarregarDepois = false; recarregar(); } }
-  } else {
-    if (semPermissao) {
+  if (perdidos.length) {
+    perdidos.forEach(g => g.ops.forEach((op, k) => refazerVista(k)));
+    REV++; pedirRender();
+    avisarRecusados(perdidos.map(g => ({ motivo: 'depende' })));
+  }
+  const lote = [], chaves = new Set();
+  let nOps = 0;
+  for (const g of FILA) {
+    if (g === grupoAtual) break;
+    const ks = [...g.ops.keys()];
+    if (ks.some(k => chaves.has(k))) break;                          // depende de outro grupo deste lote: vai no próximo
+    if ([...g.ops.values()].some(esperandoOutro)) break;
+    if (lote.length && (lote.length >= 100 || nOps + ks.length > limiteOps)) break;
+    lote.push(g); ks.forEach(k => chaves.add(k)); nOps += ks.length;
+  }
+  if (!lote.length) { if (!FILA.some(g => g.ops.size)) mostrarSync('ok'); return; }
+  lote.forEach(g => FILA.splice(FILA.indexOf(g), 1));
+  VOO = lote;
+  mostrarSync('salvando');
+  // o envio de cada grupo fica guardado: o reenvio (resposta perdida, banco fora do ar) manda exatamente o mesmo
+  const enviar = lote.map(g => g.enviado || (g.enviado = { n: g.n, id: g.id, ops: [...g.ops.values()].map(op => {
+    const o = { c: op.c, i: op.i, t: op.t }, se = versaoDepois(op);
+    if (op.modo) o.modo = op.modo;
+    if (op.d) o.d = copia(op.d);
+    if (op.p && op.p.length) o.p = copia(op.p);
+    if (typeof se === 'number') o.se = se;
+    return o;
+  }) }));
+  let res = null, erro = null;
+  const inicioLote = Date.now();
+  try {
+    res = await DB.gravarLote(enviar);
+    if (!Array.isArray(res)) throw new Error('Resposta inesperada do banco.');
+  } catch (e) { erro = e; }
+  if (erro) {
+    // erro com código do banco (57014 = passou do tempo, 42501 = sem permissão...): a chamada foi desfeita e nada foi
+    // gravado. Sem resposta clara (a rede caiu no meio, tempo esgotado aqui, resposta estranha) ou queda da conexão com
+    // o banco (08xxx, PGRST001: pode ter sido logo depois de gravar): o banco pode ter gravado, e o grupo fica incerto
+    // até uma resposta dele (o reenvio volta como "ja" se já tinha entrado).
+    const code = String(erro.code || ''), tempo = code === '57014' && (lote.length > 1 || soSubstituicoes(lote[0]));
+    const certo = /^([0-9A-Z]{5}|PGRST\d{3})$/.test(code) && code !== 'PGRST001' && !code.startsWith('08');
+    if (!certo) lote.forEach(g => { g.incerto = true; });
+    let dividir = false;
+    if (tempo && lote.length === 1) {
+      // as partes ganham códigos novos, que o banco não reconheceria como já gravados: um grupo que talvez tenha
+      // entrado num envio anterior sem resposta só é dividido depois de o banco confirmar que ele não entrou
+      const g = lote[0];
+      if (g.incerto && (await DB.grupoGravado(g.id).catch(() => null)) === false) g.incerto = false;
+      dividir = !g.incerto;
+    }
+    VOO = [];
+    FILA.unshift(...lote);                                           // volta para a frente da fila, na mesma ordem
+    const tocadas = new Set();
+    liberarEspera(tocadas);
+    if (tocadas.size) { tocadas.forEach(refazerVista); REV++; pedirRender(); }
+    if (tempo) {
+      // passou do tempo do banco: tenta já, com menos de cada vez (o grupo incerto e inteiro volta como "ja" assim que
+      // as travas do banco soltarem)
+      if (!limiteAntesDosCortes) limiteAntesDosCortes = limiteOps;
+      if (nOps > limiteAntesDosCortes / 2) tetoOps = Math.min(tetoOps, Math.max(10, Math.floor(nOps * 3 / 4)));
+      limiteOps = Math.max(10, Math.floor(nOps / 2));
+      if (dividir) dividirGrupo(lote[0]);
+      flushTimer = setTimeout(descarregar, lote.length > 1 || dividir ? 50 : 2000);
+      return;
+    }
+    console.error('Falha ao salvar na nuvem', erro);
+    if (erro && erro.code === '42501') {                             // o banco recusou: esta conta ainda é da equipe?
       if (await perdeuOAcesso()) return;
-      if (salvando || (!PEND.size && !PEND_DEL.size)) return;              // enquanto conferia, outra gravação já cuidou da fila
+      if (VOO.length) return;                                        // enquanto conferia, outra gravação já cuidou da fila
     }
     tentativas++;
     mostrarSync('erro');
-    if (avisarFalha) { avisarFalha = false; toast('Sem conexão: as últimas alterações ainda NÃO foram salvas. Deixe esta página aberta até a conexão voltar.', 'bad'); }
+    if (avisarFalha) {
+      avisarFalha = false;
+      // sem resposta clara (nesta chamada ou num envio anterior de um grupo do lote), o banco pode já ter gravado: o
+      // aviso não diz que nada foi salvo (quem acredita repete a venda)
+      toast(certo && !lote.some(g => g.incerto) ? 'Sem conexão: as últimas alterações ainda NÃO foram salvas. Deixe esta página aberta e não repita o que já fez: elas serão gravadas quando a conexão voltar.'
+        : 'Sem conexão: talvez as últimas alterações ainda não tenham sido salvas. Deixe esta página aberta e não repita o que já fez: quando a conexão voltar, o sistema confere e termina sozinho, sem gravar em dobro.', 'bad');
+    }
     retryTimer = setTimeout(descarregar, Math.min(60000, 4000 * tentativas));
+    return;
   }
+  VOO = [];
+  tentativas = 0;
+  limiteAntesDosCortes = 0;
+  // demora da rede: a menor das 3 últimas gravações pequenas (cliques comuns), medidas antes desta
+  const gastou = Date.now() - inicioLote, ida = idas.length ? Math.min(...idas) : 0;
+  const aplicadosAgora = new Set(res.filter(r => r && r.ok && !r.ja).map(r => r.n));
+  const opsAplicadas = lote.reduce((s, g) => s + (aplicadosAgora.has(g.n) ? g.ops.size : 0), 0);
+  if (opsAplicadas >= tetoOps / 2 && gastou - ida < 2000) tetoOps = Math.min(300, tetoOps * 2);
+  if (nOps <= 5) idas = [...idas.slice(-2), gastou];
+  limiteOps = Math.min(tetoOps, limiteOps * 2);
+  aplicarResposta(lote, res);
+  if (FILA.some(g => g.ops.size)) agendarGravacao();
+  else { mostrarSync('ok'); if (recarregarDepois) { recarregarDepois = false; recarregar(); } }
+}
+/* Atualiza a cópia do banco com uma linha { c, i, v, e, d } ou { c, i, x: true, v }. Devolve true se mudou algo. */
+function atualizarBase(l) {
+  if (!l || typeof l.c !== 'string' || typeof l.i !== 'string') return false;
+  const k = l.c + '/' + l.i, b = BASE.get(k);
+  if (l.x) {
+    const v = l.v == null ? null : Number(l.v);
+    if (v !== null) { if (b && b.v > v) return false; APAGADOS.set(k, Math.max(APAGADOS.get(k) || 0, v)); }
+    if (!b) return false;
+    BASE.delete(k);
+    return true;
+  }
+  const v = Number(l.v) || 0;
+  if (b && b.v >= v) return false;                                   // já temos esta versão ou uma mais nova
+  if ((APAGADOS.get(k) || 0) > v) return false;                      // foi excluído depois desta versão
+  APAGADOS.delete(k);
+  BASE.set(k, { d: copia(l.d), v });
+  return true;
+}
+function aplicarResposta(lote, res) {
+  const porN = new Map(res.map(r => [r && r.n, r])), recusados = [], renumerados = [], semResposta = [], tocadas = new Set();
+  lote.forEach(g => {
+    const r = porN.get(g.n);
+    if (!r) { semResposta.push(g); return; }
+    g.ops.forEach((op, k) => tocadas.add(k));
+    // recusado: o registro como este aparelho o via, lido antes das linhas da resposta (um registro excluído no outro
+    // aparelho sai da cópia do banco com elas, e o aviso ficaria sem o nome dele)
+    const alvoRecusa = r.ok ? '' : String(r.motivo || '').slice(String(r.motivo || '').indexOf(':') + 1);
+    const vistoAntes = r.ok ? null : vistaDe(alvoRecusa) || (BASE.get(alvoRecusa) || {}).d;
+    (Array.isArray(r.r) ? r.r : []).forEach(atualizarBase);
+    if (r.ok) {
+      // versão em que ESTE grupo deixou cada registro (num reenvio, "gv"; "r" traz como está agora, talvez já mexido
+      // por outro aparelho, e um grupo seguinte que depende deste precisa conferir contra a versão dele)
+      const versoes = new Map();
+      (r.ja && Array.isArray(r.gv) ? r.gv : r.r || []).forEach(l => { if (l && l.c) versoes.set(l.c + '/' + l.i, l.x ? -1 : Number(l.v)); });
+      RESULTADOS.set(g.n, { ok: true, versoes });
+      g.ops.forEach((op, k) => {
+        if (op.t !== 'novo' || (op.c !== 'vendas' && op.c !== 'orcamentos') || !op.d) return;
+        const b = BASE.get(k), antigo = num(op.d.numero), novoN = b ? num(b.d.numero) : 0;
+        if (antigo && novoN && antigo !== novoN) renumerados.push({ col: op.c, id: op.i, antigo, novo: novoN });
+      });
+    } else {
+      RESULTADOS.set(g.n, { ok: false });
+      const motivo = String(r.motivo || ''), alvo = alvoRecusa, j = alvo.indexOf('/');
+      const col = alvo.slice(0, j), op = g.ops.get(alvo);
+      // "Feito" de manutenção: o grupo levava também o registro (e o custo) da manutenção, que não entrou
+      const manut = col === 'manutItens' && [...g.ops.values()].some(o => o.c === 'manutHist' && o.t === 'novo');
+      recusados.push({ motivo: motivo.split(':')[0], col, manut, d: vistaDe(alvo) || vistoAntes || ULTIMO_VISTO.get(alvo) || (op && op.d) || (BASE.get(alvo) || {}).d });
+    }
+  });
+  if (semResposta.length) { semResposta.forEach(g => { g.incerto = true; }); FILA.unshift(...semResposta); }
+  if (RESULTADOS.size > 3000) {
+    // esquece os mais velhos, menos o de que um grupo ainda não respondido (ou a janela aberta) depende
+    const usados = new Set();
+    VOO.concat(FILA).forEach(h => h.ops.forEach(op => { if (op.seGrupo !== undefined) usados.add(op.seGrupo); }));
+    if (FORM && FORM.registro && FORM.registro.pre && FORM.registro.pre.seGrupo !== undefined) usados.add(FORM.registro.pre.seGrupo);
+    for (const n of [...RESULTADOS.keys()]) {
+      if (RESULTADOS.size <= 3000) break;
+      if (!usados.has(n)) RESULTADOS.delete(n);
+    }
+  }
+  liberarEspera(tocadas);                  // avisos que esperavam esta resposta: entram agora, e a versão decide
+  tocadas.forEach(refazerVista);
+  REV++; pedirRender();
+  avisarRecusados(recusados);
+  renumerados.forEach(x => corrigirNumero(x.col, x.id, x.antigo, x.novo));
+}
+/* Aviso do que não foi gravado porque outro aparelho mexeu antes. */
+function avisarRecusados(lista) {
+  if (!lista.length) return;
+  // "Feito" num item que o outro aparelho excluiu: a manutenção e o custo dela ficaram fora, e isso tem aviso próprio
+  const manutFora = x => `Outro aparelho excluiu ${descricaoRegistro(x.col, x.d)}. A manutenção (e o custo) não foi gravada: se ela foi feita, registre em “Registrar manutenção avulsa”.`;
+  if (lista.length > 1) {
+    toast(`${lista.length} alterações não foram gravadas porque outro aparelho mudou ou excluiu os mesmos registros pouco antes. A tela já mostra como ficou.`, 'bad');
+    lista.filter(x => x.manut && x.motivo === 'apagado').forEach(x => toast(manutFora(x), 'bad'));
+    return;
+  }
+  const { motivo, col, d, manut } = lista[0], desc = descricaoRegistro(col, d);
+  const msg = {
+    mudou: `Outro aparelho mudou ${desc} pouco antes. Esta alteração não foi gravada e a tela já mostra como ficou: confira e repita, se ainda precisar.`,
+    apagado: manut ? manutFora(lista[0]) : `Outro aparelho excluiu ${desc}. Esta alteração não foi gravada.`,
+    existe: `Outro aparelho já tinha registrado ${desc}. Nada foi gravado em dobro; a tela já mostra o que está salvo.`,
+    depende: 'Uma alteração não foi gravada porque dependia de outra que outro aparelho desfez antes. A tela já mostra como ficou.',
+  }[motivo] || `O banco não aceitou uma alteração (${desc}). Ela não foi gravada.`;
+  toast(msg, 'bad');
+}
+/* Pedido ou orçamento criado ao mesmo tempo em dois aparelhos (ou sem internet) com o mesmo número: o banco deu o
+   próximo. Acerta o número nos textos ligados a ele (contas, observações) e avisa. */
+function corrigirNumero(col, id, antigo, novoN) {
+  const troca = (t, rot) => String(t ?? '').replace(new RegExp('(' + rot + ' nº ?)' + antigo + '(?![0-9])', 'gi'), '$1' + novoN);
+  const acertar = (lista, campo, rot, colecao) => lista.forEach(r => { const novo = troca(r[campo], rot); if (novo !== String(r[campo] ?? '')) { r[campo] = novo; put(colecao, r); } });
+  novoGrupo();
+  if (col === 'vendas') acertar(S.contas.filter(c => c.origem === 'venda' && c.origemId === id), 'descricao', 'pedido', 'contas');
+  else {
+    const vendas = S.vendas.filter(v => v.orcamentoId === id), ids = new Set(vendas.map(v => v.id));
+    acertar(S.contas.filter(c => (c.origem === 'orcamento' && c.origemId === id) || (c.origem === 'venda' && ids.has(c.origemId))), 'descricao', 'orçamento', 'contas');
+    acertar(vendas, 'obs', 'orçamento', 'vendas');
+    acertar(S.ordens.filter(o => o.orcamentoId === id), 'obs', 'orçamento', 'ordens');
+  }
+  novoGrupo();
+  toast(`O nº ${antigo} já tinha sido usado em outro aparelho: ${col === 'vendas' ? 'o pedido' : 'o orçamento'} ficou com o nº ${novoN}.`);
 }
 /* Gravação recusada por falta de permissão: confere com o servidor se esta conta ainda é da equipe. Se não é, larga
    o que estava na fila (não pode ser gravado mais tarde por cima dos dados dos outros) e volta para a entrada. */
@@ -325,65 +776,97 @@ async function perdeuOAcesso() {
     const { data, error } = await sb.rpc('entrar');
     if (error || data !== 'sem_acesso') return false;                       // sem resposta clara, ou ainda é da equipe: segue tentando
   } catch (e) { return false; }
-  PEND.clear(); PEND_DEL.clear();
+  FILA.length = 0; VOO = []; grupoAtual = null;
   if (FORM) FORM.sujo = false;
   saindoSemAcesso = true;                                                   // não há o que salvar: sai sem a pergunta do navegador
   location.reload();
   return true;
 }
 let saindoSemAcesso = false;
+/* Canal ao vivo fora do ar há mais de 10 s (rede, antivírus ou proxy barrando): o selo avisa e o sistema confere o
+   que mudou a cada minuto, até o canal voltar. */
+let aoVivo = true, semAoVivo = false, aoVivoTimer = null, pollTimer = null;
 function mostrarSync(estado) {
   syncEstado = estado;
-  const txt = { ok: DEMO ? 'Demonstração (só neste navegador)' : 'Tudo salvo na nuvem', salvando: 'Salvando…', erro: 'Sem conexão — clique para tentar de novo' }[estado];
-  $$('.sync').forEach(el => { el.className = 'sync s-' + estado; el.title = txt; const t = $('.sync-txt', el); if (t) t.textContent = txt; });
+  const semVivo = estado === 'ok' && semAoVivo && !DEMO, cls = semVivo ? 'semvivo' : estado;
+  const txt = semVivo ? 'Tudo salvo · sem atualização ao vivo (confere a cada minuto)'
+    : { ok: DEMO ? 'Demonstração (só neste navegador)' : 'Tudo salvo na nuvem', salvando: 'Salvando…', erro: 'Sem conexão — clique para tentar de novo' }[estado];
+  $$('.sync').forEach(el => { el.className = 'sync s-' + cls; el.title = txt; const t = $('.sync-txt', el); if (t) t.textContent = txt; });
 }
-window.addEventListener('online', () => { if (PEND.size || PEND_DEL.size) descarregar(); });
+function aoConectarAoVivo() {
+  aoVivo = true; semAoVivo = false;
+  clearTimeout(aoVivoTimer); clearInterval(pollTimer); pollTimer = null;
+  mostrarSync(syncEstado);
+  conferirMudancas();                                // o que mudou enquanto o canal não estava ligado não chega por ele
+}
+function aoCairAoVivo() {
+  aoVivo = false;
+  clearTimeout(aoVivoTimer);
+  aoVivoTimer = setTimeout(() => { if (!aoVivo) { semAoVivo = true; mostrarSync(syncEstado); } }, 10000);
+  if (!pollTimer) pollTimer = setInterval(() => { if (!aoVivo && !document.hidden) conferirMudancas(); }, 60000);
+}
+window.addEventListener('online', () => { if (FILA.length) descarregar(); conferirMudancas(); });
 window.addEventListener('beforeunload', e => { if (!saindoSemAcesso && (temPendencias() || (FORM && FORM.sujo))) { e.preventDefault(); e.returnValue = ''; } });
 
-/* Primeira conexão do canal ao vivo: o que outro aparelho gravou entre a leitura da abertura e a inscrição no canal
-   não chega por ele. Confere os carimbos das linhas gravadas desde a última gravação lida (com folga de 15 s), baixa
-   inteiras só as que estão mais novas no banco e aplica como se tivessem chegado pelo canal. Mudança demais ou erro:
-   relê tudo. (Uma exclusão feita nesse intervalo só aparece na próxima releitura completa.) */
-async function conferirDesdeAbertura() {
-  if (DEMO || typeof DB.carimbosDesde !== 'function') return;
-  let maior = 0;
-  VER.forEach(t => { if (t > maior) maior = t; });
+/* Confere o que outro aparelho gravou ou excluiu desde a última leitura (com folga de 15 s): na conexão do canal ao
+   vivo (o que mudou antes dela não chega por ele), ao voltar para a aba, a cada 5 minutos e, com o canal fora do ar,
+   a cada minuto. Baixa inteiras só as linhas mais novas que as daqui. Mudança demais: relê tudo. */
+let conferindo = false, conferirDeNovo = false, conferirTimer = null;
+async function conferirMudancas() {
+  if (DEMO || !sb || typeof DB.mudancasDesde !== 'function' || !$('#main')) return;
+  if (conferindo) { conferirDeNovo = true; return; }
+  conferindo = true;
+  clearTimeout(conferirTimer);
   try {
-    const carimbos = await DB.carimbosDesde(new Date(Math.max(0, maior - 15000)).toISOString());
-    if (!carimbos) return recarregar();
-    const mudou = carimbos.filter(r => {
-      const k = r.colecao + '/' + r.id, t = Date.parse(r.atualizado_em) || 0;
-      return !(VER.has(k) && t <= VER.get(k));
-    });
-    if (!mudou.length) return;
-    if (mudou.length > 300) return recarregar();
-    const linhas = await DB.lerChaves(mudou);
-    linhas.forEach(r => aplicarRemoto({ tipo: 'UPSERT', colecao: r.colecao, id: r.id, dados: r.dados, atualizado_em: r.atualizado_em }));
+    const r = await DB.mudancasDesde(new Date(Math.max(0, MARCA_LIDA - 15000)).toISOString());
+    if (!r) { recarregar(); return; }
+    const mais = (k, v) => { const b = BASE.get(k); return !(b && b.v >= v) && !((APAGADOS.get(k) || 0) > v); };
+    const novas = r.linhas.filter(l => mais(l.colecao + '/' + l.id, Number(l.versao) || 0));
+    if (novas.length > 300) { recarregar(); return; }
+    if (novas.length) (await DB.lerChaves(novas)).forEach(l => aplicarRemoto({ tipo: 'UPSERT', colecao: l.colecao, id: l.id, dados: l.dados, versao: l.versao, atualizado_em: l.atualizado_em }));
+    r.apagados.forEach(a => aplicarRemoto({ tipo: 'DELETE', colecao: a.colecao, id: a.id, versao: a.versao }));
+    r.linhas.forEach(l => { MARCA_LIDA = Math.max(MARCA_LIDA, Date.parse(l.atualizado_em) || 0); });
+    r.apagados.forEach(a => { MARCA_LIDA = Math.max(MARCA_LIDA, Date.parse(a.apagado_em) || 0); });
   } catch (e) {
-    console.warn('Não foi possível conferir o que mudou na abertura', e);
-    recarregar();
+    console.warn('Não foi possível conferir o que mudou', e);
+    conferirTimer = setTimeout(conferirMudancas, 15000);
+  } finally {
+    conferindo = false;
+    if (conferirDeNovo) { conferirDeNovo = false; conferirMudancas(); }
   }
 }
+setInterval(() => { if (!document.hidden) conferirMudancas(); }, 5 * 60000);
 let renderPendente = false, renderTimer = null;
+/* Chave com grupo deste aparelho de resultado ainda desconhecido: em voo, ou de volta à fila depois de um envio sem
+   resposta clara (o banco pode ter gravado). Nela, a cópia do banco fica parada até o resultado chegar: se o aviso já
+   trouxer a nossa gravação (o eco chegou antes da resposta), reaplicar o grupo por cima contaria a soma do estoque e a
+   média do preço duas vezes, e um custo calculado nesse intervalo seria gravado errado. */
+const chaveIncerta = k => VOO.some(g => g.ops.has(k)) || FILA.some(g => g.incerto && g.ops.has(k));
+function guardarAviso(k, l) {
+  const e = ESPERA.get(k) || {}, campo = l.x ? 'x' : 'l';
+  if (!e[campo] || (Number(l.v) || 0) >= (Number(e[campo].v) || 0)) e[campo] = l;
+  ESPERA.set(k, e);
+}
+/* Resultado conhecido: os avisos guardados entram na cópia do banco, na ordem das versões (a resposta pode já ser mais
+   nova, e então o aviso não muda nada), e a chave vai para tocadas, para a tela ser refeita. */
+function liberarEspera(tocadas) {
+  ESPERA.forEach((e, k) => {
+    if (chaveIncerta(k)) return;
+    ESPERA.delete(k);
+    [e.l, e.x].filter(Boolean).sort((a, b) => (Number(a.v) || 0) - (Number(b.v) || 0)).forEach(atualizarBase);
+    tocadas.add(k);
+  });
+}
+/* Mudança que chegou de outro aparelho (canal ao vivo ou conferência): entra na cópia do banco e a tela é refeita com
+   as alterações daqui que ainda não foram enviadas por cima. Eco de uma gravação nossa ou aviso velho: nada muda. */
 function aplicarRemoto(ev) {
-  const k = ev.colecao + '/' + ev.id;
-  if (PEND.has(k) || PEND_DEL.has(k) || EM_VOO.has(k)) return;           // há mudança local mais nova a caminho
-  if (ev.tipo === 'DELETE') {
-    VER.delete(k);
-    const lista = S[ev.colecao];
-    if (Array.isArray(lista)) { const i = lista.findIndex(x => x.id === ev.id); if (i >= 0) lista.splice(i, 1); }
-  } else {
-    const t = Date.parse(ev.atualizado_em) || 0;
-    if (VER.has(k) && t <= VER.get(k)) return;                             // eco de uma gravação nossa ou evento antigo
-    VER.set(k, t);
-    if (ev.colecao === 'meta') {
-      if (ev.id === 'config') S.config = { ...CONFIG_PADRAO, ...soSimples(ev.dados) };
-      else if (ev.id === 'perfil') S.perfil = perfilLimpo(ev.dados);
-    } else if (Array.isArray(S[ev.colecao]) && registroValido(ev.dados) && ev.dados.id === ev.id) {
-      const lista = S[ev.colecao], i = lista.findIndex(x => x.id === ev.id);
-      if (i >= 0) lista[i] = ev.dados; else lista.push(ev.dados);
-    }
-  }
+  const l = ev.tipo === 'DELETE' ? { c: ev.colecao, i: ev.id, x: true, v: ev.versao }
+    : { c: ev.colecao, i: ev.id, v: ev.versao, e: ev.atualizado_em, d: ev.dados };
+  if (typeof l.c !== 'string' || typeof l.i !== 'string') return;
+  const k = l.c + '/' + l.i;
+  if (chaveIncerta(k)) { guardarAviso(k, l); return; }             // espera a resposta da gravação daqui
+  if (!atualizarBase(l)) return;
+  refazerVista(k);
   REV++; pedirRender();
 }
 function pedirRender() {
@@ -408,37 +891,39 @@ async function carregarTudo(recarga = false) {
   // o que está na tela nem grava nada: recarrega a página, e a entrada decide o que mostrar.
   if (recarga && !rows.length) { location.reload(); return true; }
   const s = novoEstado(), vistos = new Set();
-  let temConfig = false;
-  VER.clear();
+  let temConfig = false, marca = 0;
+  BASE.clear(); ESPERA.clear();
   rows.forEach(r => {
     const k = r.colecao + '/' + r.id;
     if (vistos.has(k)) return;
     vistos.add(k);
-    if (r.atualizado_em) VER.set(k, Date.parse(r.atualizado_em) || 0);
+    marca = Math.max(marca, Date.parse(r.atualizado_em) || 0);
+    BASE.set(k, { d: copia(r.dados), v: Number(r.versao) || 0 });
     if (r.colecao === 'meta') {
       if (r.id === 'config') { Object.assign(s.config, soSimples(r.dados)); temConfig = true; }
       else if (r.id === 'perfil') s.perfil = perfilLimpo(r.dados);
-    } else if (Array.isArray(s[r.colecao]) && registroValido(r.dados) && r.dados.id === r.id) s[r.colecao].push(r.dados);
+    } else if (Array.isArray(s[r.colecao]) && registroValido(r.dados) && r.dados.id === r.id) { s[r.colecao].push(r.dados); DA_TELA.add(r.dados); }
   });
   S = s; REV++;
+  MARCA_LIDA = Math.max(MARCA_LIDA, marca);
   // Primeiro uso: grava os padrões. Só na abertura do sistema, logo depois de a entrada confirmar que a conta é da
   // equipe; numa atualização com o sistema aberto nunca, para não passar os padrões por cima dos dados de verdade.
   if (!temConfig && !recarga) {
-    saveMeta('config'); saveMeta('perfil');
-    CANAIS_PADRAO.forEach(c => { if (!byId('canais', c.id)) put('canais', { ...c }); });
+    saveMeta('config', { tudo: true }); saveMeta('perfil', { tudo: true });
+    CANAIS_PADRAO.forEach(c => { if (!byId('canais', c.id)) put('canais', { ...c }, { seExistir: 'ignorar' }); });
   }
 }
 let escondidoEm = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { escondidoEm = Date.now(); return; }
-  if (escondidoEm && Date.now() - escondidoEm > 60000 && $('#main')) recarregar();
+  if (escondidoEm && Date.now() - escondidoEm > 60000 && $('#main')) conferirMudancas();
   conferirVersao();
 });
 
 /* ---------- Versão nova publicada ----------
    Uma aba aberta continua na versão antiga até ser recarregada. Ao voltar para a aba (no máximo a cada 5 minutos) e a
    cada 30 minutos, confere o número da versão publicada e, se houver uma mais nova, oferece atualizar. */
-const VERSAO = 15;
+const VERSAO = 16;
 let avisouVersao = false, conferidoEm = 0;
 async function conferirVersao(forcar = false) {
   if (DEMO || avisouVersao || !$('#main') || (!forcar && Date.now() - conferidoEm < 5 * 60000)) return;
@@ -474,12 +959,13 @@ async function recarregar(tentativa = 0) {
   if (temPendencias()) { recarregarDepois = true; descarregar(); return; }      // grava o que falta e recarrega em seguida
   if (recarregando) { recarregarDeNovo = true; return; }                        // pedido novo com uma leitura em andamento
   recarregando = true;
-  let velho = false;
+  let velho = false, falhou = false;
   try { velho = (await carregarTudo(true)) === false; if (!velho) pedirRender(); }
-  catch (e) { console.warn('Não foi possível atualizar agora', e); }
+  catch (e) { falhou = true; console.warn('Não foi possível atualizar agora', e); }
   recarregando = false;
   const deNovo = recarregarDeNovo; recarregarDeNovo = false;
-  if (velho && tentativa < 3) setTimeout(() => recarregar(tentativa + 1), 1500);
+  // não desiste: leitura velha (algo mudou durante ela) ou sem rede tenta de novo, cada vez com mais calma
+  if (velho || falhou) setTimeout(() => recarregar(tentativa + 1), Math.min(60000, (velho ? 1500 : 5000) * (tentativa + 1)));
   else if (deNovo) recarregar();
 }
 
@@ -673,7 +1159,7 @@ function toast(msg, tipo = '') {
   const t = document.createElement('div');
   t.className = 'toast ' + tipo; t.textContent = msg;
   cx.appendChild(t);
-  setTimeout(() => t.remove(), tipo === 'bad' ? 6000 : 3200);
+  setTimeout(() => t.remove(), tipo === 'bad' || tipo === 'warn' ? 6000 : 3200);
 }
 const confirmar = msg => window.confirm(msg);
 
@@ -798,6 +1284,14 @@ function lerCampos(form, fields) {
 function openForm(o) {
   const m = $('#modal'), vals = o.vals || {};
   FORM = { o, files: {}, orig: [], novos: [], sujo: false, enviando: 0 };
+  /* registro: [coleção, id] do registro que a janela edita. Ao salvar, só vai ao banco o que a pessoa mudou (o resto
+     fica como estiver, mesmo que outro aparelho tenha mudado enquanto a janela estava aberta); pedido, ordem, conta e
+     os outros movimentos só gravam se ninguém mudou o registro depois que a janela abriu; e se outro aparelho excluiu
+     o registro, nada é gravado. */
+  if (o.registro && o.registro[1]) {
+    const [col, id] = o.registro, k = col + '/' + id;
+    FORM.registro = { k, snap: vistaDe(k) || {}, pre: COM_VERSAO.has(col) ? precondicao(k, null) : null };
+  }
   o.fields.forEach(f => {
     if (f.type !== 'file') return;
     const v = vals[f.k];
@@ -871,14 +1365,16 @@ function openForm(o) {
     FORM.salvando = true;
     const meuForm = FORM;
     const d = lerCampos(form, o.fields);
+    FORM_SALVANDO = meuForm.registro || null;
     try {
       const r = await o.save(d, form);
       if (r === false) { meuForm.salvando = false; return; }
     } catch (err) {
-      console.error(err);
       meuForm.salvando = false;
+      if (err && err.jaAvisado) { if (FORM === meuForm) { FORM.sujo = false; fecharForm(); } render(); return; }   // já explicado na tela
+      console.error(err);
       return toast('Não foi possível salvar: ' + (err.message || err), 'bad');
-    }
+    } finally { FORM_SALVANDO = null; }
     if (FORM !== meuForm) {                         // a janela foi fechada ou trocada enquanto salvava
       if ($('#modal.open')) renderPendente = true; else render();
       return;

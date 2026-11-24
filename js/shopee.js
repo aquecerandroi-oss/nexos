@@ -233,7 +233,9 @@ function shpAplicar() {
   if (!novos.length && !atualizar.length && !excluir.length) { toast('Marque pelo menos um pedido.'); return; }
   if (excluir.length && !confirmar(`Tirar do Nexos ${excluir.length === 1 ? '1 pedido cancelado' : excluir.length + ' pedidos cancelados'} na Shopee? As peças voltam para o estoque.`)) return;
   let n = 0, a = 0, x = 0;
+  // cada pedido é um grupo à parte: se outro aparelho trouxe um deles ao mesmo tempo, só aquele volta (sem estoque em dobro)
   novos.forEach(k => {
+    novoGrupo();
     const o = pedidos[k];
     if (!o || byId('vendas', shpIdVenda(o.order_sn)) || S.vendas.some(v => v.shopeeOrderSn === o.order_sn)) return;
     const itens = (o.itens || []).map((i, j) => {
@@ -248,6 +250,7 @@ function shpAplicar() {
     n++;
   });
   atualizar.forEach(k => {
+    novoGrupo();
     const o = pedidos[k], v = o && S.vendas.find(z => z.shopeeOrderSn === o.order_sn);
     if (!v || !o.taxas) return;
     const s = simularVenda({ canalId: v.canalId, ...shpValores(o), itens: itensVenda(v).map(i => ({ produtoId: i.produtoId, produtoNome: i.produtoNome, qtd: i.qtdOriginal, precoUnit: i.precoUnit, custoUnit: i.custoUnit })) });
@@ -258,9 +261,11 @@ function shpAplicar() {
     a++;
   });
   excluir.forEach(k => {
+    novoGrupo();
     const o = pedidos[k], v = o && S.vendas.find(z => z.shopeeOrderSn === o.order_sn);
     if (v) { excluirVenda(v); x++; }
   });
+  novoGrupo();
   fecharModal(); render();
   toast([n ? `${n} pedido(s) trazido(s)` : '', a ? `${a} atualizado(s)` : '', x ? `${x} tirado(s)` : ''].filter(Boolean).join(', ') + '.');
 }

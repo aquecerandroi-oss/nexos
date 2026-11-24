@@ -402,6 +402,7 @@ function comNovaDevolucao(id) {
   const posicao = valor => (valor === '' ? -1 : Math.round(num(valor)));      // posição do item no pedido (-1: nenhum)
   openForm({
     title: 'Devolução — ' + comTituloPedido(v),
+    registro: ['vendas', v.id],                       // pedido mudado em outro aparelho com a janela aberta: não grava em cima
     fields: [
       // o nome não pode ser "item": form.elements.item é uma função do navegador, não o campo
       { k: 'itemDevolvido', label: 'Item devolvido', type: 'select', full: true, options: opcoes.length > 1 ? [['', '— escolha o item —'], ...opcoes] : opcoes },
@@ -545,7 +546,8 @@ function comLancarSinal(o) {
     return false;
   }
   if (!confirmar(`Lançar o sinal de ${brl(t.sinal)} (${pct(t.sinalPct)} do total) em Contas a receber?\n\nA conta vence hoje. Quando o cliente pagar, marque como recebida.`)) return false;
-  criarConta({ tipo: 'receber', descricao: comDescSinal(o), valor: t.sinal, vencimento: hoje(),
+  // código fixo: aprovar o mesmo orçamento em dois aparelhos não lança o sinal duas vezes
+  criarConta({ id: 'sinal-' + o.id, tipo: 'receber', descricao: comDescSinal(o), valor: t.sinal, vencimento: hoje(),
     clienteId: byId('clientes', o.clienteId) ? o.clienteId : '', origem: 'orcamento', origemId: o.id, parte: 'sinal' });
   return true;
 }
@@ -578,6 +580,7 @@ function comEditarOrcamento(id) {
   let sinalDigitado = !!o && num(o.sinalPct) > 0;
   openForm({
     title: o ? 'Orçamento nº ' + o.numero : 'Novo orçamento',
+    registro: o ? ['orcamentos', o.id] : null,
     wide: true,
     fields: [
       { k: 'clienteId', label: 'Cliente', type: 'select', options: [['', '— não cadastrado —'], ...comPorNome(S.clientes).map(c => [c.id, c.nome])] },
@@ -751,6 +754,7 @@ async function comOrcamentoPDF(id) {
   const o = byId('orcamentos', id);
   if (!o || (comPdfUltimo.id === id && Date.now() - comPdfUltimo.em < 1000)) return;
   if (comGerandoPDF) return toast(`Aguarde: o PDF do orçamento nº ${comGerandoPDF} ainda está sendo gerado.`);
+  comAvisarNumeroProvisorio(o);
   comGerandoPDF = String(o.numero ?? '');
   const botoes = $$('button[onclick^="comOrcamentoPDF"]'), botao = botoes.find(b => b.dataset.id === id);
   botoes.forEach(b => { b.disabled = true; });
@@ -799,9 +803,14 @@ function comFoneWhats(telefone) {
   if (d.length === 10 || d.length === 11) d = '55' + d;
   return d.length >= 12 && d.length <= 15 ? d : '';
 }
+/* Orçamento criado sem internet ainda não chegou ao banco: o número dele pode mudar quando a conexão voltar. */
+function comAvisarNumeroProvisorio(o) {
+  if (!confirmadoNoBanco('orcamentos', o.id)) toast(`O orçamento nº ${o.numero} ainda não chegou à nuvem (sem internet?). O número pode mudar quando a conexão voltar; confira antes de enviar.`, 'bad');
+}
 function comOrcamentoTexto(id) {
   const o = byId('orcamentos', id);
   if (!o) return;
+  comAvisarNumeroProvisorio(o);
   const cli = byId('clientes', o.clienteId), fone = cli ? comFoneWhats(cli.telefone) : '';
   abrirModal(`
     <p class="muted">Copie o texto e cole na conversa com o cliente.</p>
@@ -835,7 +844,9 @@ function comProduzirOrcamento(id) {
   const resumo = itens.map(i => `• ${nf(Math.max(1, Math.round(num(i.qtd))))}× ${byId('produtos', i.produtoId).nome}`).join('\n');
   if (!confirmar(`Criar as ordens de produção do orçamento nº ${o.numero}?\n\n${resumo}\n\nElas entram no fim da fila da impressora.`)) return;
   const clienteId = byId('clientes', o.clienteId) ? o.clienteId : '';
-  itens.forEach(i => novaOrdem({ produtoId: i.produtoId, qtd: i.qtd, clienteId, obs: 'Orçamento nº ' + o.numero }));
+  // códigos fixos (orçamento + item): "Produzir" nos dois aparelhos ao mesmo tempo não cria as ordens em dobro
+  itens.forEach((i, n) => novaOrdem({ id: ('orc-' + o.id).slice(0, 58) + '-' + n, produtoId: i.produtoId, qtd: i.qtd, clienteId,
+    obs: 'Orçamento nº ' + o.numero, orcamentoId: o.id }));
   o.ordensGeradas = true;
   put('orcamentos', o);
   toast((itens.length === 1 ? '1 ordem criada' : nf(itens.length) + ' ordens criadas') + ' na fila de produção.');
@@ -867,6 +878,9 @@ function comFaturarOrcamento(id) {
   const padrao = byId('canais', 'direta') || canais[0] || comSemCanal;
   // itens do pedido: os avulsos (fora do catálogo) entram sem custo de peça
   const itensPedido = itens.map(i => ({ produtoId: i.produtoId, produtoNome: i.descricao, qtd: i.qtd, precoUnit: i.precoUnit, custoUnit: i.produtoId ? undefined : 0 }));
+  // o que esta janela mostra: se o orçamento mudar em outro aparelho com ela aberta, a venda não sai com valores velhos
+  const fotoOrc = x => JSON.stringify([comItensParaVenda(x), arred(totalOrcamento(x).total, 2), arred(comSinalEmContas(x), 2)]);
+  const fotoAbertura = fotoOrc(o);
   let freteDigitado = false;
   const fields = [
     { k: 'data', label: 'Data da venda', type: 'date', req: true },
@@ -917,10 +931,20 @@ function comFaturarOrcamento(id) {
       const receber = temRestante && d.restante === 'receber';
       if (receber && !d.vencimento) { toast('Informe quando o cliente vai pagar o restante (vencimento).', 'bad'); return false; }
       const atual = byId('orcamentos', id);
-      if (!atual || comOrcVendido(atual)) { toast('A venda deste orçamento já foi registrada.'); return; }
+      if (!atual) { toast('Este orçamento foi excluído enquanto a janela estava aberta.', 'bad'); return; }
+      if (comOrcVendido(atual)) { toast('A venda deste orçamento já foi registrada.'); return; }
+      if (fotoOrc(atual) !== fotoAbertura) {                  // itens, desconto ou sinal mudaram: refaz a janela com o que vale agora
+        toast('Este orçamento mudou em outro aparelho enquanto a janela estava aberta. Confira o resumo atualizado e registre de novo.', 'bad');
+        if (FORM) FORM.sujo = false;
+        fecharModal();
+        comFaturarOrcamento(id);
+        return false;
+      }
       const clienteId = byId('clientes', atual.clienteId) ? atual.clienteId : '', nome = comClienteOrc(atual);
       const sinalAgora = comSinalEmContas(atual), resto = Math.max(0, arred(totalOrcamento(atual).total - sinalAgora, 2));
-      const v = registrarVenda({ data: d.data, canalId: d.canalId, frete: d.frete, clienteId, obs: 'Orçamento nº ' + atual.numero, orcamentoId: atual.id, itens: itensPedido });
+      // código fixo (o do orçamento): registrar a mesma venda em dois aparelhos não cria dois pedidos nem baixa o estoque duas vezes
+      const v = registrarVenda({ id: ('ov-' + atual.id).slice(0, 64), data: d.data, canalId: d.canalId, frete: d.frete, clienteId,
+        obs: 'Orçamento nº ' + atual.numero, orcamentoId: atual.id, itens: itensPedido });
       const vaiReceber = receber && resto > 0;
       if (vaiReceber) {
         criarConta({ tipo: 'receber',
@@ -1009,6 +1033,7 @@ function comEditarCliente(id) {
   const c = byId('clientes', id);
   openForm({
     title: c ? 'Editar cliente' : 'Novo cliente',
+    registro: c ? ['clientes', c.id] : null,
     fields: [
       { k: 'nome', label: 'Nome', req: true, full: true },
       { k: 'telefone', label: 'Telefone / WhatsApp', type: 'tel', ph: '(11) 99999-9999' },

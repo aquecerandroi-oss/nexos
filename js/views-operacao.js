@@ -389,6 +389,7 @@ function opFormOrdem(o, produtoId, clienteId, qtd) {
   }
   openForm({
     title: o ? 'Editar ordem de produção' : 'Nova ordem de produção',
+    registro: o ? ['ordens', o.id] : null,
     fields: [
       { k: 'produtoId', label: 'Produto', type: 'select', options: optsProd, req: true, full: true },
       { k: 'qtd', label: 'Quantidade de peças', type: 'number', req: true },
@@ -623,8 +624,10 @@ VIEWS.manutencao = function () {
 };
 function opAdicionarSugeridos() {
   const h = horimetro();
+  // código fixo por item sugerido: clicar nos dois aparelhos ao mesmo tempo não repete os itens
   opSugeridos.forEach(([nome, intervaloH]) => {
-    if (!S.manutItens.some(i => i.nome === nome)) put('manutItens', { id: uid(), nome, intervaloH, ultimaH: h });
+    const id = ('sug-' + nomeSeguro(nome).replace(/[.]/g, '-').toLowerCase()).slice(0, 64);
+    if (!S.manutItens.some(i => i.nome === nome || i.id === id)) put('manutItens', { id, nome, intervaloH, ultimaH: h }, { seExistir: 'ignorar' });
   });
   render();
   toast('Itens sugeridos adicionados. Ajuste os intervalos como preferir.');
@@ -632,14 +635,17 @@ function opAdicionarSugeridos() {
 /* Formulário do item (sem id = novo). */
 function opEditarItem(id) {
   const item = byId('manutItens', id), itemId = item ? item.id : '', h = arred(horimetro(), 1);
+  // o horímetro da última vez como a janela mostrou ao abrir (o registro na tela muda se outro aparelho der "Feito")
+  const ultimaMostrada = item ? arred(item.ultimaH, 1) : null;
   openForm({
     title: item ? 'Editar item de manutenção' : 'Novo item de manutenção',
+    registro: item ? ['manutItens', item.id] : null,
     fields: [
       { k: 'nome', label: 'O que precisa ser feito', req: true, full: true, ph: 'Ex.: Trocar o bico' },
       { k: 'intervaloH', label: 'A cada quantas horas de impressão', type: 'number', req: true },
       { k: 'ultimaH', label: 'Horímetro na última vez que foi feito', type: 'number', hint: 'Hoje o horímetro marca ' + nf(h, 1) + ' h' },
     ],
-    vals: item ? { nome: item.nome, intervaloH: item.intervaloH, ultimaH: arred(item.ultimaH, 1) } : { nome: '', intervaloH: '', ultimaH: h },
+    vals: item ? { nome: item.nome, intervaloH: item.intervaloH, ultimaH: ultimaMostrada } : { nome: '', intervaloH: '', ultimaH: h },
     save: d => {
       const agora = arred(horimetro(), 1);
       if (!d.nome) { toast('Dê um nome para o item.', 'bad'); return false; }
@@ -653,7 +659,8 @@ function opEditarItem(id) {
       }
       const atual = byId('manutItens', itemId);
       if (!atual) { toast('Este item não existe mais.', 'bad'); return; }
-      const ultimaH = d.ultimaH === arred(atual.ultimaH, 1) ? atual.ultimaH : d.ultimaH;
+      // campo como abriu: fica o valor de agora (exato, ou o "Feito" que outro aparelho deu com a janela aberta)
+      const ultimaH = d.ultimaH === ultimaMostrada ? atual.ultimaH : d.ultimaH;
       put('manutItens', { ...atual, nome: d.nome, intervaloH: d.intervaloH, ultimaH });
       toast('Item atualizado.');
     },
@@ -676,6 +683,17 @@ function opFeito(id) {
 function opManutAvulsa() { opFormManut(null); }
 function opFormManut(item) {
   const itemId = item ? item.id : '';
+  // código da manutenção: o item e quantos "Feito" ele já teve, contados ao abrir a janela. Dois aparelhos que abriram
+  // o mesmo item chegam ao mesmo código, e o segundo "Feito" volta com aviso em vez de registrar em dobro. Cada "Feito"
+  // soma 1 na contagem do item (também sem internet), e a próxima manutenção dele ganha outro código. Código já usado
+  // antes de a janela abrir (ex.: item excluído e criado de novo com o mesmo código) passa para o próximo livre.
+  let feitos = 0, idManut = '';
+  if (item) {
+    const raiz = ('mh-' + item.id).slice(0, 40) + '-';
+    feitos = Math.max(0, Math.floor(num(item.feitos)));
+    while (byId('manutHist', raiz + feitos)) feitos++;
+    idManut = raiz + feitos;
+  }
   const explica = item
     ? `O horímetro marca ${nf(horimetro(), 1)} h. Ao salvar, a contagem de <b>${esc(item.nome)}</b> volta a zero.`
     : 'Use para consertos e trocas que não estão na lista de itens. Não zera a contagem de nenhum item.';
@@ -696,7 +714,9 @@ function opFormManut(item) {
         return;
       }
       if (!byId('manutItens', itemId)) { toast('Este item não existe mais.', 'bad'); return; }
-      registrarManutencao({ itemId, data: d.data, custo: d.custo, descricao: d.descricao });
+      // outro aparelho já registrou esta mesma manutenção (abriu a janela no mesmo momento do item): não registra em dobro
+      if (idManut && byId('manutHist', idManut)) { toast('Esta manutenção já foi registrada em outro aparelho. Nada foi gravado em dobro.', 'bad'); return; }
+      registrarManutencao({ id: idManut, feitos, itemId, data: d.data, custo: d.custo, descricao: d.descricao });
       toast('Manutenção registrada. A contagem do item voltou a zero.');
     },
   });

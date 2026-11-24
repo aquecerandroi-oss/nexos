@@ -149,6 +149,7 @@ function ctaEditar(id, tipo) {
   const origem = c ? ctaOrigem(c) : null;
   openForm({
     title: c ? (pagar ? 'Editar conta a pagar' : 'Editar conta a receber') : (pagar ? 'Nova conta a pagar' : 'Nova conta a receber'),
+    registro: c ? ['contas', c.id] : null,
     fields: [
       ...(origem ? [{ type: 'html', html: `<p class="hint">Ligada a: ${esc(origem.texto)}.</p>` }] : []),
       { k: 'descricao', label: 'Descrição', req: true, full: true, ph: pagar ? 'Ex.: Aluguel de dezembro' : 'Ex.: Restante da encomenda de chaveiros' },
@@ -205,6 +206,7 @@ function ctaPagar(id) {
       : 'O valor entra no caixa do Financeiro na data em que foi recebido (venda a prazo só conta no caixa quando o dinheiro chega).';
   openForm({
     title: receber ? 'Receber conta' : 'Pagar conta',
+    registro: ['contas', c.id],                       // se a conta mudar em outro aparelho com a janela aberta, não paga em cima
     saveLabel: receber ? 'Marcar como recebida' : 'Marcar como paga',
     fields: [
       { type: 'html', html: resumo },

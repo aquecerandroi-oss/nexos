@@ -69,6 +69,8 @@ VIEWS.financeiro = function () {
   const linhasLanc = lancs.map(l => {
     const tipo = gesTipoLanc(l.tipo), conta = gesDeConta(l);
     const categoria = tipo === 'retirada' ? gesNomeSocio(l.socio) : esc(tipo === 'entrada' ? 'Outras entradas' : l.categoria || 'Outros');
+    // cópia de fixo paga em outro mês (adiantada ou atrasada): diz de que mês ela é, para não parecer repetida
+    const deMes = mesDaCopiaFixo(l), outroMes = deMes && deMes !== String(l.data || '').slice(0, 7) ? deMes : '';
     const botoes = conta
       ? gesBotao(tipo === 'entrada' ? 'Desfazer recebimento' : 'Desfazer pagamento', 'ctaDesfazer', l.contaId)
       : gesBotao('Editar', 'gesEditarLancamento', l.id) + gesBotao('Excluir', 'gesExcluirLancamento', l.id, 'danger');
@@ -76,13 +78,14 @@ VIEWS.financeiro = function () {
       <td class="num">${esc(dataBR(l.data))}</td>
       <td>${selos[tipo]}</td>
       <td>${categoria}</td>
-      <td style="min-width:180px">${esc(l.descricao)}${conta ? `<small>${tipo === 'entrada' ? 'Conta recebida' : 'Conta paga'}</small>` : ''}</td>
+      <td style="min-width:180px">${esc(l.descricao)}${conta ? `<small>${tipo === 'entrada' ? 'Conta recebida' : 'Conta paga'}</small>` : ''}${outroMes ? `<small>Referente a ${esc(nomeMesLongo(outroMes))}</small>` : ''}</td>
       <td>${l.fixo ? selo('Todo mês') : ''}</td>
       <td class="right num${tipo === 'entrada' ? ' pos' : ''}">${gesBrl(l.valor)}</td>
       <td><div class="rowbtns">${botoes}</div></td></tr>`;
   }).join('');
   const resumoLanc = `Gastos: ${gesBrl(c.gastos)} · Retiradas: ${gesBrl(c.retiradas)}` + (temEntradas ? ` · Entradas: ${gesBrl(c.entradas)}` : '');
-  const fixosAnt = S.lancamentos.filter(l => l.fixo && noPeriodo(l.data, ant, ant)).length;
+  // o que a cópia faria neste mês vazio: uma por série do mês anterior cuja cópia deste mês ainda não existe
+  const fixosAnt = new Set(fixosDoMes(ant).filter(l => !byId('lancamentos', idCopiaFixo(l, gesMes))).map(serieFixo)).size;
   const semLancamentos = vazio(`Nenhum gasto, retirada ou entrada em ${mesNome}. Lance aqui aluguel, internet, anúncios, o que os sócios retirarem e o dinheiro que entrar fora das vendas.`,
     `<div class="inline" style="justify-content:center"><button type="button" class="btn" onclick="gesNovoLancamento('gasto')">+ Gasto</button>${fixosAnt
       ? `<button type="button" class="btn ghost" style="white-space:normal" onclick="gesCopiarFixos()">Copiar ${gesPlural(fixosAnt, 'lançamento fixo', 'lançamentos fixos')} de ${esc(nomeMesLongo(ant))}</button>` : ''}</div>`);
@@ -189,6 +192,7 @@ function gesFormLancamento(l, tipoNovo) {
   const categorias = gesCategorias.includes(vals.categoria) ? gesCategorias : [...gesCategorias, vals.categoria];
   openForm({
     title: l ? 'Editar lançamento' : { gasto: 'Novo gasto', retirada: 'Nova retirada', entrada: 'Nova entrada' }[tipo],
+    registro: l ? ['lancamentos', l.id] : null,
     fields: [
       { k: 'tipo', label: 'Tipo', type: 'select', options: [['gasto', 'Gasto'], ['retirada', 'Retirada dos sócios'], ['entrada', 'Entrada (fora das vendas)']],
         hint: 'Entrada é dinheiro que entrou fora das vendas, como um reembolso.' },
@@ -250,12 +254,21 @@ function gesVerEmContas() {
   else ir('contas');
 }
 function gesCopiarFixos() {
-  const ant = addMeses(gesMes, -1), antNome = nomeMesLongo(ant);
-  const haviaFixos = S.lancamentos.some(l => l.fixo && noPeriodo(l.data, ant, ant));
-  const n = copiarFixos(gesMes);
+  const ant = addMeses(gesMes, -1), antNome = nomeMesLongo(ant), info = {};
+  const haviaFixos = fixosDoMes(ant).length > 0;
+  const n = copiarFixos(gesMes, info);
+  const lista = nomes => nomes.map(t => '“' + (t || 'sem descrição') + '”').join(', ');
   if (n) toast(gesPlural(n, 'lançamento fixo copiado', 'lançamentos fixos copiados') + ' de ' + antNome + '.');
-  else if (haviaFixos) toast('Nada novo para copiar: os gastos fixos de ' + antNome + ' já estão neste mês.');
-  else toast('Não há gastos marcados como “Repete todo mês” em ' + antNome + '.');
+  else if (haviaFixos && !info.fora.length) toast('Nada novo para copiar: os gastos fixos de ' + antNome + ' já estão neste mês.');
+  else if (!haviaFixos) {
+    // nada é do mês anterior; um fixo datado nele só pode ser a cópia de outro mês, paga lá (atrasada ou adiantada)
+    const deOutro = S.lancamentos.filter(l => l.fixo && noPeriodo(l.data, ant, ant));
+    if (deOutro.length) toast(`Nada copiado: ${antNome} ainda não tem a cópia dos gastos fixos dele. O que aparece lá como “Todo mês” (${lista(deOutro.map(l => l.descricao))}) é de outro mês, pago em ${antNome}. Copie primeiro em ${antNome} e depois volte aqui.`, 'warn');
+    else toast('Não há gastos marcados como “Repete todo mês” em ' + antNome + '.');
+  }
+  // a cópia deste mês existe, mas com a data em outro mês (paga adiantada ou atrasada): não copia de novo e diz onde está
+  if (info.fora.length) toast('Não copiado: ' + info.fora.map(f => `“${f.descricao || 'sem descrição'}” (a cópia deste mês está em ${dataBR(f.data)})`).join(', ') + '.', 'warn');
+  if (info.iguais.length) toast(`Em ${antNome} havia lançamentos fixos iguais (mesma descrição, dia e valor): ${lista(info.iguais)}. Todos foram copiados; se algum era repetido, exclua a cópia que sobrou.`, 'warn');
   render();
 }
 function gesUsarFixosNoRateio() {
@@ -429,7 +442,7 @@ VIEWS.config = function () {
       <div class="grid3" style="${p.grade || gesGradeConfig}">${p.campos.map(f => campo(dicas[f.k] ? { ...f, hint: dicas[f.k] } : f, valores[f.k])).join('')}</div>${extras[p.id] || ''}</div>`).join('');
   const oculto = gesRascunho ? '' : ' hidden';
   return head('Configuração', 'Tudo que entra no cálculo de custo e lucro') + `
-    <form onsubmit="gesSalvarConfig(event)" oninput="gesRascunhar(this)" style="margin-bottom:22px">
+    <form onsubmit="gesSalvarConfig(event)" oninput="gesRascunhar(this, event)" style="margin-bottom:22px">
       ${paineis}
       ${gesResumoHora()}
       <div class="actions">
@@ -476,27 +489,35 @@ function gesResumoHora() {
     <p class="hint">Conta feita com os valores já salvos. No custo de cada peça entram também o filamento, a mão de obra, os insumos e a taxa de falhas.</p>`;
 }
 
-/* Guarda só o que está diferente do valor salvo e mostra o aviso de alterações pendentes.
-   Também atualiza, enquanto a pessoa digita, o aviso da alíquota e a soma das partes dos sócios. */
-function gesRascunhar(form) {
-  const v = lerCampos(form, gesCamposConfig), dif = {};
-  gesCamposConfig.forEach(f => { if (f.k in v && !gesIgualCampo(f, v[f.k], S.config[f.k])) dif[f.k] = v[f.k]; });
-  gesRascunho = Object.keys(dif).length ? dif : null;
+/* Guarda só os campos em que a pessoa mexeu (e que ficaram diferentes do valor salvo) e mostra o aviso de alterações
+   pendentes. Um campo que outro aparelho mudou enquanto esta tela estava aberta não entra: ao salvar, ele não volta
+   ao valor velho. Também atualiza, enquanto a pessoa digita, o aviso da alíquota e a soma das partes dos sócios. */
+function gesRascunhar(form, ev) {
+  const v = lerCampos(form, gesCamposConfig), el = ev && ev.target, f = el && el.name ? gesCamposConfig.find(c => c.k === el.name) : null;
+  if (f && f.k in v) {
+    const dif = { ...(gesRascunho || {}) };
+    if (gesIgualCampo(f, v[f.k], S.config[f.k])) delete dif[f.k]; else dif[f.k] = v[f.k];
+    gesRascunho = Object.keys(dif).length ? dif : null;
+  }
   $$('[data-ges-rascunho]', form).forEach(el => { el.hidden = !gesRascunho; });
   const imposto = $('[data-ges-aviso-imposto]', form), somaEl = $('[data-ges-soma-socios]', form), txt = gesTextoSomaSocios(v);
   if (imposto) imposto.hidden = !!v.impostoConfirmado;
   if (somaEl) { somaEl.textContent = txt; somaEl.hidden = !txt; }
 }
 function gesDescartarConfig() { gesRascunho = null; render(); }
+/* Salva só o que a pessoa mudou nesta tela (o rascunho); o resto da configuração fica como estiver no banco. */
 function gesSalvarConfig(e) {
   e.preventDefault();
-  const v = lerCampos(e.target, gesCamposConfig);
-  if (v.imposto + v.margem >= 100) {
+  const tela = lerCampos(e.target, gesCamposConfig), mexidos = Object.keys(gesRascunho || {}).filter(k => k in tela);
+  if (!mexidos.length) { gesRascunho = null; render(); return toast('Nada mudou na configuração.'); }
+  const v = { ...S.config };
+  mexidos.forEach(k => { v[k] = tela[k]; });
+  if (num(v.imposto) + num(v.margem) >= 100) {
     return toast('Imposto e margem juntos precisam ficar abaixo de 100%. A margem é a parte do preço de venda que fica como lucro.', 'bad');
   }
   const somaSocios = arred(num(v.socio1Pct) + num(v.socio2Pct), 2);
   if (somaSocios > 100 && !confirmar(`As partes dos sócios somam ${pct(somaSocios)}, mais que 100%. Assim a divisão no Financeiro reparte mais do que o resultado.\n\nSalvar mesmo assim?`)) return;
-  Object.assign(S.config, v);
+  mexidos.forEach(k => { S.config[k] = tela[k]; });
   gesRascunho = null;
   saveMeta('config'); render(); toast('Configuração salva.');
 }
@@ -530,6 +551,7 @@ function gesEditarPessoa(id) {
   if (id && !p) return toast('Essa pessoa não existe mais.', 'bad');
   openForm({
     title: p ? 'Editar pessoa' : 'Nova pessoa',
+    registro: p ? ['pessoas', p.id] : null,
     fields: [
       { k: 'nome', label: 'Nome', req: true, full: true, ph: 'Ex.: Ana (acabamento)' },
       { k: 'valorHora', label: 'Valor da hora (R$)', type: 'number', hint: `Deixe 0 para usar o valor geral de ${brl(S.config.maoObraHora)} por hora.` },
@@ -588,6 +610,7 @@ function gesEditarCanal(id) {
   if (id && !c) return toast('Esse canal não existe mais.', 'bad');
   openForm({
     title: c ? 'Editar canal' : 'Novo canal',
+    registro: c ? ['canais', c.id] : null,
     fields: [
       { k: 'nome', label: 'Nome do canal', req: true, full: true, ph: 'Ex.: Shopee, Mercado Livre, Feira' },
       { k: 'pct', label: 'Comissão (%)', type: 'number' },

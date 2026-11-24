@@ -269,6 +269,7 @@ function cadFormProduto(orig, base) {
   cadFatiadoAtual = null; cadFatiadoSeq++;    // leitura do fatiador de uma janela anterior não vale para esta
   openForm({
     title: orig ? 'Editar produto' : base ? 'Novo produto (cópia)' : 'Novo produto',
+    registro: orig ? ['produtos', orig.id] : null,
     wide: true,
     fields: cadCamposProduto(base, temInsumos),
     vals,
@@ -549,6 +550,7 @@ function cadEditarFilamento(id) {
   if (f && f.tipo && !tipos.includes(f.tipo)) tipos.push(f.tipo);
   openForm({
     title: f ? 'Editar filamento' : 'Novo filamento',
+    registro: f ? ['filamentos', f.id] : null,
     fields: [
       { k: 'nome', label: 'Nome', req: true, full: true, ph: 'Ex.: PLA Preto Fosco' },
       { k: 'tipo', label: 'Tipo', type: 'select', options: tipos.map(t => [t, t]) },
@@ -691,6 +693,7 @@ function cadEditarFornecedor(id) {
   if (id && !f) return toast('Este fornecedor não existe mais.', 'bad');
   openForm({
     title: f ? 'Editar fornecedor' : 'Novo fornecedor',
+    registro: f ? ['fornecedores', f.id] : null,
     fields: [
       { k: 'nome', label: 'Nome', req: true, full: true },
       { k: 'contato', label: 'Contato', full: true, ph: 'Site, WhatsApp…' },
@@ -753,6 +756,7 @@ function cadEditarInsumo(id) {
   if (i && i.unidade && !unidades.includes(i.unidade)) unidades.push(i.unidade);
   openForm({
     title: i ? 'Editar insumo' : 'Novo insumo',
+    registro: i ? ['insumos', i.id] : null,
     fields: [
       { k: 'nome', label: 'Nome', req: true, full: true, ph: 'Ex.: Caixa de papelão 10 × 10' },
       { k: 'unidade', label: 'Unidade', type: 'select', options: unidades.map(u => [u, u]) },

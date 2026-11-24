@@ -333,11 +333,204 @@
   ok('pdf: rodapé comprido termina em … sem ponto solto', gigante.includes(' \x85)') && !/\xb7\) Tj/.test(gigante), 0);
   rm('orcamentos', 'orcpdf');
 
+  // 31. dois aparelhos: o "outro PC" grava direto no banco local da demonstração (mesmas regras da função gravar)
+  const pausa = (ms = 150) => new Promise(r => setTimeout(r, ms));
+  const outroPC = grupos => { const e = DBDemo._ler(); const r = bancoGravar(e, grupos, agoraISO()); localStorage.setItem(DEMO_KEY, JSON.stringify(e)); return r; };
+  const noBanco = (c, i) => { const l = DBDemo._ler().linhas[c + '/' + i]; return l ? l.d : null; };
+  await pausa();
+  const X = put('produtos', { nome: 'Peça dois PCs', materiais: [{ filamentoId: F.id, pesoG: 10 }], horas: 1, estoque: 10, precos: { direta: 30 } });
+  await pausa();
+  outroPC([{ n: 1, ops: [{ c: 'produtos', i: X.id, t: 'mudar', p: [{ a: { estoque: 5 } }] }] }]);           // outro PC produziu 5
+  registrarVenda({ data: hoje(), canalId: 'direta', itens: [{ produtoId: X.id, qtd: 3, precoUnit: 30 }] });  // este PC vende 3 sem saber
+  ok('dois PCs: a tela mostra a venda na hora', byId('produtos', X.id).estoque === 7, byId('produtos', X.id).estoque);
+  await pausa();
+  ok('dois PCs: estoque somado no banco (10 + 5 − 3)', noBanco('produtos', X.id).estoque === 12, noBanco('produtos', X.id).estoque);
+  ok('dois PCs: a tela fica igual ao banco depois da resposta', byId('produtos', X.id).estoque === 12, byId('produtos', X.id).estoque);
+  const ordemX = novaOrdem({ produtoId: X.id, qtd: 2 });
+  await pausa();
+  const filAntes = byId('filamentos', F.id).estoqueG;
+  outroPC([{ n: 2, ops: [{ c: 'ordens', i: ordemX.id, t: 'mudar', p: [{ s: { status: 'imprimindo', inicio: agoraISO() } }] }] }]);
+  concluirOrdem(byId('ordens', ordemX.id));                                                                 // este PC conclui em cima da versão velha
+  await pausa();
+  ok('dois PCs: movimento em cima de versão velha volta inteiro', noBanco('ordens', ordemX.id).status === 'imprimindo' && byId('ordens', ordemX.id).status === 'imprimindo', [noBanco('ordens', ordemX.id).status, byId('ordens', ordemX.id).status]);
+  ok('dois PCs: e o material que ele baixaria não sai', byId('filamentos', F.id).estoqueG === filAntes && noBanco('filamentos', F.id).estoqueG === filAntes, [filAntes, byId('filamentos', F.id).estoqueG]);
+  ok('dois PCs: aviso explica o que houve', $$('#toasts .toast').some(t => /Outro aparelho mudou a ordem/.test(t.textContent)), $$('#toasts .toast').map(t => t.textContent).slice(-2));
+  const nPrevisto = proximoNumeroPedido();
+  outroPC([{ n: 3, ops: [{ c: 'vendas', i: 'vendaOutroPC', t: 'novo', d: { numero: nPrevisto, itens: [], devolucoes: [] } }] }]);
+  const vMeu = registrarVenda({ data: hoje(), canalId: 'direta', itens: [{ produtoId: X.id, qtd: 1, precoUnit: 30 }] });
+  criarConta({ tipo: 'receber', descricao: `Pedido nº ${vMeu.numero} — teste`, valor: 30, vencimento: hoje(), origem: 'venda', origemId: vMeu.id, parte: 'saldo' });
+  await pausa(300);
+  const contaMinha = S.contas.find(c => c.origemId === vMeu.id);
+  ok('dois PCs: número repetido vira o próximo', byId('vendas', vMeu.id).numero === nPrevisto + 1 && noBanco('vendas', vMeu.id).numero === nPrevisto + 1, [nPrevisto, byId('vendas', vMeu.id).numero]);
+  ok('dois PCs: a conta acompanha o número novo', contaMinha && contaMinha.descricao === `Pedido nº ${nPrevisto + 1} — teste` && noBanco('contas', contaMinha.id).descricao === contaMinha.descricao, contaMinha && contaMinha.descricao);
+  const Y = put('produtos', { nome: 'Produto Y', categoria: 'A', materiais: [{ filamentoId: F.id, pesoG: 5 }], horas: 1, estoque: 4 });
+  await pausa();
+  cadEditarProduto(Y.id);
+  outroPC([{ n: 4, ops: [{ c: 'produtos', i: Y.id, t: 'mudar', p: [{ s: { categoria: 'B' }, a: { estoque: -1 } }] }] }]);
+  $('#modal [name="nome"]').value = 'Produto Y2';
+  $('#modal form').requestSubmit();
+  await pausa(300);
+  ok('dois PCs: formulário grava só o que a pessoa mudou', noBanco('produtos', Y.id).nome === 'Produto Y2' && noBanco('produtos', Y.id).categoria === 'B' && noBanco('produtos', Y.id).estoque === 3, noBanco('produtos', Y.id));
+  ok('dois PCs: e a tela fica com as duas mudanças', byId('produtos', Y.id).categoria === 'B' && byId('produtos', Y.id).nome === 'Produto Y2', byId('produtos', Y.id));
+  outroPC([{ n: 5, ops: [{ c: 'meta', i: 'config', t: 'mesclar', p: [{ s: { imposto: 9 } }] }] }]);
+  S.config.kwh = 1.2; saveMeta('config');
+  await pausa();
+  ok('dois PCs: configuração grava só o campo mudado', noBanco('meta', 'config').imposto === 9 && noBanco('meta', 'config').kwh === 1.2 && S.config.imposto === 9, [noBanco('meta', 'config').imposto, S.config.imposto]);
+  outroPC([{ n: 6, ops: [{ c: 'meta', i: 'config', t: 'mesclar', p: [{ s: { imposto: 6 } }] }] }]);
+  S.config.imposto = 6; saveMeta('config');
+  const Z = put('clientes', { nome: 'Cliente Z' });
+  await pausa();
+  comEditarCliente(Z.id);
+  outroPC([{ n: 7, ops: [{ c: 'clientes', i: Z.id, t: 'apagar' }] }]);
+  $('#modal [name="nome"]').value = 'Cliente Z2';
+  $('#modal form').requestSubmit();
+  await pausa(300);
+  ok('dois PCs: edição de algo excluído no outro PC não recria', !noBanco('clientes', Z.id) && !byId('clientes', Z.id), noBanco('clientes', Z.id));
+  if ($('#modal.open')) fecharModal();
+  const g1 = await DBDemo.gravarLote([{ n: 1, id: 'teste-repetido', ops: [{ c: 'produtos', i: X.id, t: 'mudar', p: [{ a: { estoque: 1 } }] }] }]);
+  const g2 = await DBDemo.gravarLote([{ n: 1, id: 'teste-repetido', ops: [{ c: 'produtos', i: X.id, t: 'mudar', p: [{ a: { estoque: 1 } }] }] }]);
+  ok('dois PCs: o mesmo grupo reenviado não grava duas vezes', g1[0].ok && g2[0].ja && noBanco('produtos', X.id).estoque === 12, [g2[0], noBanco('produtos', X.id).estoque]);
+  ok('dois PCs: diferença de campo vira soma no estoque e o id nunca muda',
+    iguais(diferenca('produtos', { id: 'a', estoque: 2, nome: 'x' }, { id: 'b', estoque: 5, nome: 'y' }, {}, null), { s: { nome: 'y' }, a: { estoque: 3 } }), 0);
+  await carregarTudo();                                    // a gravação direta acima não passou pela tela: relê do banco
+  // editar pela janela a quantidade de uma ordem já concluída: continua concluída e o estoque é refeito uma vez
+  const W = put('produtos', { nome: 'Produto W', materiais: [{ filamentoId: F.id, pesoG: 10 }], horas: 1, estoque: 0 });
+  const oW = novaOrdem({ produtoId: W.id, qtd: 2 });
+  await pausa();
+  concluirOrdem(byId('ordens', oW.id));
+  await pausa();
+  const filW = byId('filamentos', F.id).estoqueG;
+  opEditarOrdem(oW.id);
+  $('#modal [name="qtd"]').value = '3';
+  $('#modal form').requestSubmit();
+  await pausa(300);
+  const oW2 = noBanco('ordens', oW.id);
+  ok('editar ordem concluída pela janela: continua concluída, com custo e data', oW2.status === 'concluido' && oW2.qtd === 3 && oW2.custoUnit > 0 && !!oW2.fim && byId('ordens', oW.id).status === 'concluido', [oW2.status, oW2.custoUnit, oW2.fim]);
+  ok('editar ordem concluída pela janela: estoque e filamento refeitos uma vez', noBanco('produtos', W.id).estoque === 3 && noBanco('filamentos', F.id).estoqueG === filW - 10, [noBanco('produtos', W.id).estoque, filW, noBanco('filamentos', F.id).estoqueG]);
+  // estoque digitado no formulário com o banco já diferente do que a janela mostrava: não soma, volta com aviso
+  cadEditarProduto(W.id);
+  outroPC([{ n: 8, ops: [{ c: 'produtos', i: W.id, t: 'mudar', p: [{ a: { estoque: -1 } }] }] }]);   // outro PC vendeu 1
+  $('#modal [name="estoque"]').value = '10';
+  $('#modal form').requestSubmit();
+  await pausa(300);
+  ok('estoque digitado: outra mudança no meio faz a correção voltar (não soma)', noBanco('produtos', W.id).estoque === 2 && byId('produtos', W.id).estoque === 2, [noBanco('produtos', W.id).estoque, byId('produtos', W.id).estoque]);
+  cadEditarProduto(W.id);
+  $('#modal [name="estoque"]').value = '10';
+  $('#modal form').requestSubmit();
+  await pausa(300);
+  ok('estoque digitado: sem mudança no meio, vale o número digitado', noBanco('produtos', W.id).estoque === 10, noBanco('produtos', W.id).estoque);
+  // gastos fixos: o que se repete no mês em dias diferentes é copiado todo; dois iguais no mesmo dia e com o mesmo valor
+  // (duas parcelas, duas retiradas) também, nunca juntados, com aviso só na primeira cópia
+  const mesAntFix = addMeses(mesAtual(), -1);
+  ['05', '20'].forEach((dia, n) => put('lancamentos', { id: 'quinz' + n, data: mesAntFix + '-' + dia, tipo: 'retirada', categoria: 'Retirada', descricao: 'Pró-labore quinzenal', valor: 1000, fixo: true, socio: '1', criadoEm: agoraISO() }));
+  ['dup0', 'dup1'].forEach(id => put('lancamentos', { id, data: mesAntFix + '-10', tipo: 'gasto', categoria: 'Outros', descricao: 'Internet repetida', valor: 99, fixo: true, criadoEm: agoraISO() }));
+  await pausa();
+  const infoFix = {};
+  copiarFixos(mesAtual(), infoFix);
+  const doMes = S.lancamentos.filter(l => noPeriodo(l.data, mesAtual(), mesAtual()));
+  ok('gastos fixos: quinzenal copiado duas vezes e dois iguais no mesmo dia também (nada some)', doMes.filter(l => l.descricao === 'Pró-labore quinzenal').length === 2 && doMes.filter(l => l.descricao === 'Internet repetida').length === 2,
+    doMes.map(l => l.descricao));
+  ok('gastos fixos: a cópia avisa dos iguais', iguais(infoFix.iguais, ['Internet repetida']), infoFix.iguais);
+  // cópia de um mês levada para outra data (internet de março paga adiantada, em fevereiro): copiar março não repete e diz
+  // onde ela está; abril copia de novo, no dia de sempre
+  put('lancamentos', { id: 'movida', data: '2032-02-10', tipo: 'gasto', categoria: 'Outros', descricao: 'Internet movida', valor: 120, fixo: true, criadoEm: agoraISO() });
+  await pausa();
+  copiarFixos('2032-03');
+  const copiaMar = byId('lancamentos', 'fx-movida-203203');
+  put('lancamentos', { ...copiaMar, data: '2032-02-27' });
+  await pausa();
+  const infoMov = {}, nMov = copiarFixos('2032-03', infoMov);
+  copiarFixos('2032-04');
+  const movidas = S.lancamentos.filter(l => l.descricao === 'Internet movida').map(l => l.data).sort();
+  ok('gastos fixos: cópia levada para outro mês não é repetida, o aviso diz onde está e o mês seguinte continua no dia de sempre',
+    nMov === 0 && iguais(infoMov.fora, [{ descricao: 'Internet movida', data: '2032-02-27' }]) && iguais(movidas, ['2032-02-10', '2032-02-27', '2032-04-10']),
+    [nMov, infoMov.fora, movidas]);
+  // paga atrasada: a cópia de fevereiro levada para 02/03 antes de copiar março; março ainda ganha a sua (no dia 10), e
+  // abril segue a de março, não a atrasada
+  put('lancamentos', { id: 'atrasada', data: '2033-01-10', tipo: 'gasto', categoria: 'Outros', descricao: 'Aluguel atrasado', valor: 1000, fixo: true, criadoEm: agoraISO() });
+  await pausa();
+  copiarFixos('2033-02');
+  put('lancamentos', { ...byId('lancamentos', 'fx-atrasada-203302'), data: '2033-03-02' });
+  await pausa();
+  const nAtr = copiarFixos('2033-03');
+  copiarFixos('2033-04');
+  const atrasadas = S.lancamentos.filter(l => l.descricao === 'Aluguel atrasado').map(l => l.data).sort();
+  ok('gastos fixos: cópia paga atrasada no mês seguinte não impede a cópia desse mês, e a série segue no dia de sempre',
+    nAtr === 1 && iguais(atrasadas, ['2033-01-10', '2033-03-02', '2033-03-10', '2033-04-10']), [nAtr, atrasadas]);
+  ok('gastos fixos: a sugestão do rateio conta a cópia pelo mês dela, não pelo dia do pagamento',
+    caixaDoMes('2033-02').fixos === 1000 && caixaDoMes('2033-03').fixos === 1000, [caixaDoMes('2033-02').fixos, caixaDoMes('2033-03').fixos]);
+  // com o mês seguinte já copiado, a atrasada (paga com multa) não vira a fonte do outro mês: segue o valor de agora
+  put('lancamentos', { id: 'multa', data: '2034-01-10', tipo: 'gasto', categoria: 'Outros', descricao: 'Internet com multa', valor: 100, fixo: true, criadoEm: agoraISO() });
+  await pausa();
+  copiarFixos('2034-02'); copiarFixos('2034-03');
+  put('lancamentos', { ...byId('lancamentos', 'fx-multa-203402'), data: '2034-03-05', valor: 105 });
+  await pausa();
+  copiarFixos('2034-04');
+  const abrilMulta = S.lancamentos.filter(l => l.descricao === 'Internet com multa' && noPeriodo(l.data, '2034-04', '2034-04')).map(l => [l.data, l.valor]);
+  ok('gastos fixos: a cópia paga atrasada com multa não vira a fonte do mês seguinte', iguais(abrilMulta, [['2034-04-10', 100]]), abrilMulta);
+  // fixos nos dias 30 e 31 de janeiro: em fevereiro os dois caem no dia 28 e continuam dois; em março voltam aos dias 30 e 31
+  ['30', '31'].forEach((dia, n) => put('lancamentos', { id: 'diar' + n, data: '2031-01-' + dia, tipo: 'gasto', categoria: 'Outros', descricao: 'Diarista fim de mês', valor: 150, fixo: true, criadoEm: agoraISO() }));
+  await pausa();
+  const diarista = mes => S.lancamentos.filter(l => l.descricao === 'Diarista fim de mês' && noPeriodo(l.data, mes, mes)).map(l => l.data).sort();
+  copiarFixos('2031-02'); copiarFixos('2031-03'); copiarFixos('2031-04');
+  ok('gastos fixos: dois fixos que o mês curto junta no mesmo dia continuam dois nos meses seguintes',
+    iguais(diarista('2031-02'), ['2031-02-28', '2031-02-28']) && iguais(diarista('2031-03'), ['2031-03-30', '2031-03-31']) && iguais(diarista('2031-04'), ['2031-04-30', '2031-04-30']),
+    [diarista('2031-02'), diarista('2031-03'), diarista('2031-04')]);
+  // "Feito" na mesma manutenção nos dois PCs, com as janelas abertas na mesma contagem do item: registra uma vez só
+  const itM = put('manutItens', { nome: 'Item dois PCs', intervaloH: 100, ultimaH: 0 });
+  await pausa();
+  opFeito(itM.id);
+  outroPC([{ n: 9, ops: [{ c: 'manutHist', i: ('mh-' + itM.id).slice(0, 40) + '-0', t: 'novo', d: { data: hoje(), itemId: itM.id, descricao: 'feito no outro PC', custo: 0 } },
+    { c: 'manutItens', i: itM.id, t: 'mudar', p: [{ s: { feitos: 1 } }] }] }]);
+  $('#modal form').requestSubmit();
+  await pausa(300);
+  const histBanco = Object.values(DBDemo._ler().linhas).filter(l => l.d.itemId === itM.id && /^mh-/.test(l.d.id));
+  ok('manutenção feita nos dois PCs: o segundo não registra em dobro', histBanco.length === 1 && histBanco[0].d.descricao === 'feito no outro PC', histBanco.map(l => l.d.descricao));
+  if ($('#modal.open')) fecharModal();
+  await carregarTudo();
+  // um PC só: dois "Feito" seguidos sem impressão no meio, apagar um registro errado e refazer, e o item excluído e
+  // criado de novo com o mesmo código: todos registram
+  const itN = put('manutItens', { id: 'item-feito-seguido', nome: 'Item feito seguido', intervaloH: 100, ultimaH: horimetro() });
+  await pausa();
+  const feito = async () => { opFeito(itN.id); $('#modal form').requestSubmit(); await pausa(200); if ($('#modal.open')) fecharModal(); };
+  const doItem = () => Object.values(DBDemo._ler().linhas).filter(l => l.d.itemId === itN.id && /^mh-/.test(l.d.id)).map(l => l.d.id).sort();
+  await feito(); await feito();
+  ok('manutenção: dois "Feito" seguidos no mesmo item registram os dois', doItem().length === 2 && byId('manutItens', itN.id).feitos === 2, [doItem(), byId('manutItens', itN.id).feitos]);
+  rm('manutHist', doItem()[1]);
+  await pausa();
+  await feito();
+  ok('manutenção: apagar um registro errado e refazer registra de novo', doItem().length === 2, doItem());
+  rm('manutItens', itN.id);
+  await pausa();
+  put('manutItens', { id: 'item-feito-seguido', nome: 'Item feito seguido', intervaloH: 100, ultimaH: horimetro() });
+  await pausa();
+  await feito();
+  ok('manutenção: item excluído e criado de novo com o mesmo código também registra', doItem().length === 3, doItem());
+  // editar o item com a janela aberta enquanto o outro PC dá "Feito": sem mexer no horímetro, o "Feito" dele continua
+  const itE = put('manutItens', { id: 'item-editado', nome: 'Item editado', intervaloH: 100, ultimaH: 0.28 });
+  await pausa();
+  opEditarItem(itE.id);
+  outroPC([{ n: 10, ops: [{ c: 'manutItens', i: itE.id, t: 'mudar', p: [{ s: { ultimaH: 50, feitos: 1 } }] }] }]);
+  await carregarTudo(true);
+  $('#modal [name="intervaloH"]').value = '120';
+  $('#modal form').requestSubmit();
+  await pausa(300);
+  const itBanco = noBanco('manutItens', itE.id) || {};
+  ok('manutenção: editar o item não desfaz o "Feito" que o outro PC deu com a janela aberta', itBanco.ultimaH === 50 && itBanco.intervaloH === 120 && itBanco.feitos === 1, itBanco);
+  if ($('#modal.open')) fecharModal();
+  // salvamento que grava o mesmo registro duas vezes (editar ordem já impressa): campo que a pessoa não mexeu não volta
+  // ao valor de quando a janela abriu, e o que a primeira gravação mudou continua valendo
+  const snapO = { id: 'o', obs: 'nº 3', status: 'concluido', qtd: 2 };
+  ok('formulário: 1ª gravação do registro só leva o que a pessoa mexeu',
+    iguais(diferenca('ordens', { id: 'o', obs: 'nº 4', status: 'concluido', qtd: 2 }, { id: 'o', obs: 'nº 3', status: 'fila', qtd: 2 }, {}, { snap: snapO }, undefined), { s: { status: 'fila' } }), 0);
+  ok('formulário: na 2ª gravação a observação acertada fica, e status e quantidade entram',
+    iguais(diferenca('ordens', { id: 'o', obs: 'nº 4', status: 'fila', qtd: 2 }, { id: 'o', obs: 'nº 3', status: 'concluido', qtd: 3 }, {}, { snap: snapO }, { t: 'mudar', p: [{ s: { status: 'fila' } }] }), { s: { status: 'concluido', qtd: 3 } }), 0);
+
   // 29. persistência
   await new Promise(r => setTimeout(r, 400));
   const foto = () => JSON.stringify([S.filamentos, S.produtos, S.vendas, S.ordens, S.insumos, S.lancamentos, S.contas, S.pessoas].map(l => [...l].sort((a, b) => a.id.localeCompare(b.id))));
   const antes = foto();
-  ok('sem pendências de gravação', !temPendencias(), [PEND.size, PEND_DEL.size]);
+  ok('sem pendências de gravação', !temPendencias(), [FILA.length, VOO.length]);
   await carregarTudo();
   ok('dados iguais depois de recarregar', antes === foto(), 0);
 

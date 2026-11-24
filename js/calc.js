@@ -114,12 +114,16 @@ function melhorCanal(p) {
 
 /* ---------- Produção ---------- */
 function novaOrdem(d) {
-  return put('ordens', {
-    id: uid(), produtoId: d.produtoId, qtd: Math.max(1, Math.round(num(d.qtd))), data: d.data || hoje(), prazo: d.prazo || '',
+  const o = {
+    // id vindo de fora (ordem de um orçamento): o mesmo em qualquer aparelho, para a ordem nunca sair em dobro
+    id: d.id && ID_OK.test(String(d.id)) ? String(d.id) : uid(),
+    produtoId: d.produtoId, qtd: Math.max(1, Math.round(num(d.qtd))), data: d.data || hoje(), prazo: d.prazo || '',
     clienteId: d.clienteId || '', obs: d.obs || '', status: 'fila', criadoEm: agoraISO(),
     // posição na fila: sempre maior que todas as existentes, para ordens criadas juntas não empatarem
     ordem: S.ordens.reduce((m, x) => Math.max(m, num(x.ordem) + 1), Date.now()),
-  });
+  };
+  if (d.orcamentoId) o.orcamentoId = String(d.orcamentoId);
+  return put('ordens', o);
 }
 function iniciarOrdem(o) {
   if (!ORDEM_ATIVA(o)) return;
@@ -443,7 +447,8 @@ function registrarCompra(d) {
     const est = Math.max(0, num(f.estoqueG));
     f.precoKg = arred((est / 1000 * num(f.precoKg) + valor) / ((est + g) / 1000), 2);
     f.estoqueG = arred(num(f.estoqueG) + g, 2);
-    put('filamentos', f);
+    // no banco, a média é refeita com o estoque de lá (outro aparelho pode ter gasto ou comprado neste instante)
+    put('filamentos', f, { media: { p: 'precoKg', q: 'estoqueG', n: g, v: valor, e: 1000, k: 2 } });
   }
   return put('compras', {
     id: uid(), data: d.data || hoje(), filamentoId: d.filamentoId || '', fornecedorId: d.fornecedorId || '',
@@ -463,7 +468,7 @@ function reporInsumo(i, qtd, valor, data) {
   const est = Math.max(0, num(i.estoque));
   if (valor > 0) i.custo = arred((est * num(i.custo) + valor) / (est + qtd), 4);
   i.estoque = arred(num(i.estoque) + qtd, 3);
-  put('insumos', i);
+  put('insumos', i, valor > 0 ? { media: { p: 'custo', q: 'estoque', n: qtd, v: valor, e: 1, k: 4 } } : {});
   if (valor > 0) {
     put('lancamentos', { id: uid(), data: data || hoje(), tipo: 'gasto', categoria: 'Insumos', descricao: `Reposição: ${i.nome} (${nf(qtd, 2)} ${i.unidade || 'un'})`, valor, fixo: false, criadoEm: agoraISO() });
   }
@@ -499,12 +504,18 @@ function statusManutencao(item) {
   const p = intervalo > 0 ? usadoH / intervalo * 100 : 0;
   return { usadoH, faltaH: Math.max(0, intervalo - usadoH), pct: p, estado: intervalo <= 0 ? 'ok' : p >= 100 ? 'vencida' : p >= 85 ? 'proxima' : 'ok' };
 }
-/* d: { data, itemId (opcional), descricao, custo } — zera a contagem do item e guarda no histórico. */
+/* d: { data, itemId (opcional), descricao, custo, id e feitos (opcionais) } — zera a contagem do item e guarda no
+   histórico. id fixo (o item + quantos "Feito" ele tinha quando a janela abriu, em feitos): "Feito" no mesmo item nos
+   dois aparelhos registra uma manutenção só. O item sempre muda (feitos + 1), e o próximo "Feito" ganha outro código. */
 function registrarManutencao(d) {
   const item = byId('manutItens', d.itemId), h = horimetro();
-  if (item) { item.ultimaH = h; put('manutItens', item); }
+  if (item) {
+    item.ultimaH = h;
+    item.feitos = Math.max(Math.floor(num(item.feitos)), Number.isInteger(d.feitos) ? d.feitos : 0) + 1;
+    put('manutItens', item);
+  }
   return put('manutHist', {
-    id: uid(), data: d.data || hoje(), itemId: d.itemId || '', descricao: d.descricao || (item ? item.nome : 'Manutenção'),
+    id: d.id && ID_OK.test(String(d.id)) ? String(d.id) : uid(), data: d.data || hoje(), itemId: d.itemId || '', descricao: d.descricao || (item ? item.nome : 'Manutenção'),
     custo: num(d.custo), horimetro: h, criadoEm: agoraISO(),
   });
 }
@@ -526,7 +537,8 @@ function situacaoConta(c) {
   return c.vencimento < h ? 'vencida' : c.vencimento === h ? 'hoje' : 'aberta';
 }
 const contasAbertas = tipo => S.contas.filter(c => c.tipo === tipo && !c.pagoEm);
-function criarConta(d) {
+/* opts (opcional) vai para put: { seExistir: 'ignorar' } para uma conta de código fixo que outro aparelho pode já ter criado. */
+function criarConta(d, opts = {}) {
   const receber = d.tipo === 'receber';
   const vencimento = d.vencimento || hoje();
   return put('contas', {
@@ -539,7 +551,7 @@ function criarConta(d) {
     serie: d.serie || '', diaVenc: num(d.diaVenc) || Number(String(vencimento).slice(8, 10)) || 0,
     jaNoCaixa: !receber && !!d.jaNoCaixa,                  // compra já registrada em Compras/insumos: pagar não lança o gasto de novo
     pagoEm: '', valorPago: 0, lancamentoId: '', criadoEm: agoraISO(),
-  });
+  }, opts);
 }
 /* Marca a conta como paga (ou recebida). Conta a pagar vira um gasto no Financeiro, na data do pagamento (a não ser que
    já esteja no caixa por outro caminho). Conta a receber avulsa vira uma entrada; a de um pedido ou de um sinal de
@@ -575,7 +587,7 @@ function pagarConta(c, d = {}) {
     const serie = c.serie || c.id, idProx = (serie + '-' + mes.replace('-', '')).slice(0, 64);
     const existe = byId('contas', idProx) || S.contas.some(x => x.id !== c.id && x.tipo === 'pagar' && x.recorrente &&
       x.descricao === c.descricao && String(x.vencimento || '').slice(0, 7) === mes);
-    if (!existe) return criarConta({ ...c, id: idProx, serie, diaVenc: dia, vencimento: venc, valor: valorOriginal });
+    if (!existe) return criarConta({ ...c, id: idProx, serie, diaVenc: dia, vencimento: venc, valor: valorOriginal }, { seExistir: 'ignorar' });
   }
   return null;
 }
@@ -655,22 +667,74 @@ function caixaDoMes(mes) {
   return {
     mes, vendas: v, bruto: v.bruto, taxas: v.taxas, frete: v.frete, aPrazo, aPrazoAberto, recebidoContas, liquido, entradas, imposto: v.imposto,
     compras, manutencao, gastos, devolucoes, porCategoria, retiradas, resultado, saldo: resultado - retiradas,
-    // gastos fixos: os marcados "repete todo mês" e os que vieram de uma conta a pagar que repete
-    lancamentos: lanc, fixos: soma(gastosLista.filter(l => l.fixo || (byId('contas', l.contaId) || {}).recorrente), 'valor'),
+    // gastos fixos (sugestão do rateio): os marcados "repete todo mês", pelo mês a que pertencem (a cópia de outro mês
+    // paga neste não conta; a deste mês paga em outro conta), e os que vieram de uma conta a pagar que repete
+    lancamentos: lanc,
+    fixos: soma(gastosLista.filter(l => (l.fixo && [mes, ''].includes(mesDaCopiaFixo(l))) || (byId('contas', l.contaId) || {}).recorrente), 'valor')
+      + soma(S.lancamentos.filter(l => l.fixo && l.tipo !== 'retirada' && l.tipo !== 'entrada' && mesDaCopiaFixo(l) === mes && !noPeriodo(l.data, mes, mes)), 'valor'),
   };
 }
-/* Copia para o mês os gastos marcados como fixos do mês anterior que ainda não existem nele. Devolve quantos copiou. */
-function copiarFixos(mes) {
+/* Série de um lançamento fixo: a do original (cópias) ou o próprio código (o original, feito à mão). Só letras,
+   números, - e _ (uma série estranha, de backup adulterado, não derruba a cópia). */
+const serieFixo = l => String(l.serie || l.id).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 48);
+const idCopiaFixo = (l, mes) => ('fx-' + serieFixo(l) + '-' + mes.replace('-', '')).slice(0, 64);
+/* Mês (AAAA-MM) a que uma cópia de fixo pertence, pelo código dela (fx-série-AAAAMM); '' quando não é cópia. A data é
+   só o dia do pagamento: a cópia paga adiantada ou atrasada, em outro mês, continua sendo a do mês dela. */
+const mesDaCopiaFixo = l => {
+  const m = l && l.serie ? /-(\d{4})(\d{2})$/.exec(String(l.id)) : null, mes = m ? m[1] + '-' + m[2] : '';
+  return mes && l.id === idCopiaFixo(l, mes) ? mes : '';
+};
+/* Lançamentos fixos que valem para o mês (AAAA-MM): as cópias feitas para ele (mesmo com a data em outro mês, como a
+   internet de dezembro paga adiantada em 30/11 ou a de novembro paga atrasada em 02/12) e os outros fixos datados nele. */
+const fixosDoMes = mes => S.lancamentos.filter(l => { if (!l.fixo) return false; const c = mesDaCopiaFixo(l); return c ? c === mes : noPeriodo(l.data, mes, mes); });
+/* Copia para o mês os gastos marcados como fixos do mês anterior que ainda não existem nele. Devolve quantos copiou.
+   Cada cópia tem código fixo (a série do lançamento + o mês): copiar nos dois aparelhos ao mesmo tempo não duplica.
+   info (opcional) recebe iguais (descrições copiadas mais de uma vez: dois lançamentos iguais, no mesmo dia e com o
+   mesmo valor) e fora (a cópia deste mês já existe, mas foi levada para outra data: [{ descricao, data }]). */
+function copiarFixos(mes, info = {}) {
   const ant = addMeses(mes, -1);
   const chave = l => [l.descricao || '', l.categoria || '', l.tipo || '', l.socio || ''].join('|');   // a retirada de cada sócio é uma
-  const jaTem = new Set(S.lancamentos.filter(l => noPeriodo(l.data, mes, mes)).map(chave));
-  const fixos = S.lancamentos.filter(l => l.fixo && noPeriodo(l.data, ant, ant) && !jaTem.has(chave(l)));
-  fixos.forEach(l => {
-    const dia = String(l.data || '').slice(8, 10) || '01';
-    const ultimo = new Date(Number(mes.slice(0, 4)), Number(mes.slice(5, 7)), 0).getDate();
-    put('lancamentos', { ...l, id: uid(), data: mes + '-' + String(Math.min(Number(dia), ultimo)).padStart(2, '0'), criadoEm: agoraISO() });
+  // o que o mês já tem: os lançamentos datados nele, menos a cópia de outro mês paga nele (a deste mês ainda falta)
+  const jaTem = new Set(S.lancamentos.filter(l => noPeriodo(l.data, mes, mes) && [mes, ''].includes(mesDaCopiaFixo(l))).map(chave)), series = new Set();
+  // a cópia feita para o mês anterior vem antes do original da mesma série: é ela que segue (valor e dia de agora)
+  const fonte = fixosDoMes(ant).sort((a, b) => (mesDaCopiaFixo(b) === ant) - (mesDaCopiaFixo(a) === ant));
+  const fixos = fonte.filter(l => {
+    if (jaTem.has(chave(l))) return false;
+    // uma cópia por série. Lançamento sem série (feito à mão, ou cópia de uma versão antiga) é uma série só dele: dois
+    // iguais no mesmo dia e com o mesmo valor (duas parcelas, duas retiradas) são copiados os dois, nunca juntados
+    const k = serieFixo(l);
+    if (series.has(k)) return false;
+    series.add(k);
+    return true;
   });
-  return fixos.length;
+  const ultimoDia = m => new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate();
+  // dia em que o fixo cai: o da data, ou o original (31) quando o mês curto o pôs no último dia (30 ou 28) e a data não
+  // foi mudada à mão depois. Assim o gasto do dia 31 volta ao dia 31 em março, em vez de ficar no 28 para sempre. A
+  // cópia do mês anterior paga em outro mês (adiantada ou atrasada) volta ao dia de sempre.
+  const diaDe = l => {
+    const d = Number(String(l.data || '').slice(8, 10)) || 1, f = Math.floor(num(l.diaFixo));
+    if (!noPeriodo(l.data, ant, ant)) return f >= 1 && f <= 31 ? f : d;
+    return f > d && f <= 31 && d === ultimoDia(ant) ? f : d;
+  };
+  const copiados = [], vistos = new Set();
+  info.iguais = []; info.fora = [];
+  fixos.forEach(l => {
+    const dia = diaDe(l), serie = serieFixo(l), id = idCopiaFixo(l, mes), existente = byId('lancamentos', id);
+    if (existente) {                                       // a cópia deste mês já existe (talvez editada): fica como está
+      if (!noPeriodo(existente.data, mes, mes)) info.fora.push({ descricao: existente.descricao || '', data: existente.data || '' });
+      return;
+    }
+    put('lancamentos', { ...l, id, serie, diaFixo: dia, data: mes + '-' + String(Math.min(dia, ultimoDia(mes))).padStart(2, '0'), criadoEm: agoraISO() },
+      { seExistir: 'ignorar' });
+    copiados.push(l);
+  });
+  // aviso dos iguais (só na primeira cópia deles: dali em diante cada um tem a sua série)
+  copiados.filter(l => !l.serie).forEach(l => {
+    const k = chave(l) + '|' + String(l.data || '').slice(8, 10) + '|' + num(l.valor);
+    if (vistos.has(k) && !info.iguais.includes(l.descricao || '')) info.iguais.push(l.descricao || '');
+    vistos.add(k);
+  });
+  return copiados.length;
 }
 /* Sócios da Configuração: [{ n: '1' | '2', nome, pct }] */
 const socios = () => [1, 2].map(n => ({ n: String(n), nome: String(S.config['socio' + n + 'Nome'] || 'Sócio ' + n), pct: num(S.config['socio' + n + 'Pct']) }));

@@ -137,7 +137,7 @@ async function iniciarApp() {
   render();
   if (typeof visFecharAbertura === 'function') visFecharAbertura();
   if (typeof shopeeAoEntrar === 'function') shopeeAoEntrar();             // volta da autorização da loja na Shopee
-  DB.assinar(aplicarRemoto, primeira => (primeira ? conferirDesdeAbertura() : recarregar()));
+  DB.assinar(aplicarRemoto, aoConectarAoVivo, aoCairAoVivo);
   carregarEquipe();
 }
 let authSaindo = false;   // "Sair" em andamento: quem recarrega a página é o sair(), depois da resposta do servidor
@@ -332,9 +332,13 @@ VIEWS.perfil = function () {
     </div>`;
 };
 VIEWS.perfil.depois = () => { if (!EQUIPE) carregarEquipe(); };
+/* Salva só os campos em que a pessoa mexeu: um dado que outro aparelho mudou com esta tela aberta não volta ao valor velho. */
 function salvarPerfil(e) {
   e.preventDefault();
-  Object.assign(S.perfil, lerCampos(e.target, CAMPOS_PERFIL));
+  const tela = lerCampos(e.target, CAMPOS_PERFIL);
+  const mexidos = CAMPOS_PERFIL.filter(f => { const el = campoDoForm(e.target, f.k); return el && el.value !== el.defaultValue; });
+  if (!mexidos.length) return toast('Nada mudou nos dados da empresa.');
+  mexidos.forEach(f => { S.perfil[f.k] = tela[f.k]; });
   saveMeta('perfil'); render(); toast('Dados da empresa salvos.');
 }
 function definirLogo(inp) {
@@ -389,7 +393,9 @@ function importarBackup(inp) {
       Object.keys(PERFIL_PADRAO).forEach(k => { if (Object.prototype.hasOwnProperty.call(d.perfil, k)) S.perfil[k] = lido[k]; });
       saveMeta('perfil');
     }
-    COLS.forEach(c => { if (Array.isArray(d[c])) d[c].forEach(r => { if (registroValido(r)) put(c, r); }); });
+    // restauração: cada registro do arquivo substitui o do banco por inteiro (em partes de até 300)
+    COLS.forEach(c => { if (Array.isArray(d[c])) d[c].forEach(r => { if (registroValido(r)) put(c, r, { trocar: true }); }); });
+    novoGrupo();
     render(); toast('Backup restaurado.');
   };
   fr.readAsText(file);
