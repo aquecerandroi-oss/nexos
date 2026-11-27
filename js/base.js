@@ -357,7 +357,9 @@ function refazerVista(k) {
 }
 
 /* Grupo do clique atual: tudo o que é gravado no mesmo instante (até o próximo await) entra junto. */
+let ultimaAcao = 0;              // quando este aparelho gravou algo pela última vez (a tela não se mexe embaixo do dedo)
 function grupoAberto() {
+  ultimaAcao = Date.now();
   if (!grupoAtual) {
     const g = grupoAtual = { n: ++seqGrupo, id: SESSAO + '-' + seqGrupo, ops: new Map() };
     FILA.push(g);
@@ -438,7 +440,7 @@ function registrarMudanca(g, col, id, antes, novo, opts, form) {
   const passo = diferenca(col, antes, novo, opts, form, op);
   if (!passo) return;
   if (op) { if (op.t === 'novo' || op.t === 'trocar') op.d = novo; else op.p.push(passo); return; }
-  const pre = COM_VERSAO.has(col) ? (form && form.pre ? form.pre : precondicao(k, g)) : {};
+  const pre = COM_VERSAO.has(col) && !opts.semVersao ? (form && form.pre ? form.pre : precondicao(k, g)) : {};
   g.ops.set(k, { c: col, i: id, t: 'mudar', p: [passo], ...pre });
 }
 const NOME_REG = { canais: 'o canal de venda', filamentos: 'o filamento', fornecedores: 'o fornecedor', compras: 'a compra de filamento',
@@ -451,6 +453,10 @@ function descricaoRegistro(col, d) {
   if ((col === 'vendas' || col === 'orcamentos') && d.numero) return NOME_REG[col] + ' nº ' + d.numero;
   if (col === 'ordens') { const p = byId('produtos', d.produtoId); return NOME_REG.ordens + (p ? ` de ${nf(d.qtd)}× ${p.nome}` : ''); }
   if ((col === 'contas' || col === 'lancamentos' || col === 'manutHist') && d.descricao) return NOME_REG[col] + ' ' + txt(d.descricao);
+  if ((col === 'compras' && num(d.pesoG) > 0) || (col === 'falhas' && num(d.gramas) > 0)) {
+    const f = byId('filamentos', d.filamentoId);
+    return (col === 'compras' ? 'a compra de ' + gramas(d.pesoG) : 'a falha de ' + gramas(d.gramas)) + (f ? ' de ' + f.nome : '');
+  }
   return (NOME_REG[col] || 'o registro') + (d.nome ? ' ' + txt(d.nome) : '');
 }
 const maiuscula = t => t.charAt(0).toUpperCase() + t.slice(1);
@@ -473,7 +479,8 @@ function descartarGrupo(g) {
 
 /* put(colecao, registro, opções): grava o registro (novo ou alterado). A tela muda na hora; o banco recebe só o que
    mudou. Opções: media ({ p: campo do preço, q: campo do estoque, n: quantidade, v: valor pago, e: escala, k: casas }),
-   seExistir: 'ignorar' (código fixo: se outro aparelho já criou, fica o dele), trocar (restauração de backup). */
+   seExistir: 'ignorar' (código fixo: se outro aparelho já criou, fica o dele), trocar (restauração de backup),
+   semVersao (só para putContagem: a mudança não confere a versão do registro). */
 function put(col, rec, opts = {}) {
   const lista = S[col];
   if (!lista) throw new Error('Coleção desconhecida: ' + col);
@@ -494,6 +501,15 @@ function put(col, rec, opts = {}) {
   colocarNaTela(col, id, vistaDe(k), rec);
   REV++; agendarGravacao();
   return byId(col, id) || rec;
+}
+/* Contagem que só informa (ex.: quantas falhas a ordem já teve): vai sozinha num grupo, antes do resto do clique, e sem
+   conferir a versão do registro. Assim outra mudança nele no outro aparelho não derruba o resto do clique (a falha e a baixa
+   do filamento entram de qualquer jeito); e, se ela não entrar (o outro aparelho excluiu o registro), ninguém é avisado. */
+function putContagem(col, rec) {
+  novoGrupo();
+  const g = grupoAberto();
+  put(col, rec, { semVersao: true });
+  if (g.ops.size) { g.semAviso = true; novoGrupo(); }
 }
 /* Este aparelho mexeu (fora do salvamento da janela) no registro que a janela aberta edita: ex.: o acerto automático do
    número do pedido na conta. A janela passa a esperar a versão que esse grupo vai gravar, para não ver a mudança do
@@ -569,12 +585,14 @@ async function descarregar() {
     const g = FILA[i];
     if (g === grupoAtual) continue;
     if (!g.ops.size) { FILA.splice(i--, 1); continue; }
-    if (!g.enviado && [...g.ops.values()].some(op => versaoDepois(op) === null)) { FILA.splice(i--, 1); RESULTADOS.set(g.n, { ok: false }); perdidos.push(g); }
+    if (!g.enviado && [...g.ops.values()].some(op => versaoDepois(op) === null)) { FILA.splice(i--, 1); RESULTADOS.set(g.n, { ok: false, semAviso: !!g.semAviso }); perdidos.push(g); }
   }
   if (perdidos.length) {
     perdidos.forEach(g => g.ops.forEach((op, k) => refazerVista(k)));
     REV++; pedirRender();
-    avisarRecusados(perdidos.map(g => ({ motivo: 'depende' })));
+    // o grupo de que ele dependia foi recusado pelo banco e essa recusa já foi avisada (ex.: Desfazer clicado antes da
+    // resposta de uma ação que o outro aparelho já tinha feito): um segundo aviso só confundiria
+    avisarRecusados(perdidos.filter(g => !g.semAviso && !dependiaDeRecusaAvisada(g)).map(() => ({ motivo: 'depende' })));
   }
   const lote = [], chaves = new Set();
   let nOps = 0;
@@ -708,7 +726,8 @@ function aplicarResposta(lote, res) {
         if (antigo && novoN && antigo !== novoN) renumerados.push({ col: op.c, id: op.i, antigo, novo: novoN });
       });
     } else {
-      RESULTADOS.set(g.n, { ok: false });
+      RESULTADOS.set(g.n, { ok: false, semAviso: !!g.semAviso });
+      if (g.semAviso) return;                                         // contagem que só informa: não entrou e ninguém precisa saber
       const motivo = String(r.motivo || ''), alvo = alvoRecusa, j = alvo.indexOf('/');
       const col = alvo.slice(0, j), op = g.ops.get(alvo);
       // "Feito" de manutenção: o grupo levava também o registro (e o custo) da manutenção, que não entrou
@@ -733,8 +752,16 @@ function aplicarResposta(lote, res) {
   avisarRecusados(recusados);
   renumerados.forEach(x => corrigirNumero(x.col, x.id, x.antigo, x.novo));
 }
+/* Grupo perdido que só dependia de grupos recusados pelo banco com a recusa já avisada (ou perdidos por isso). */
+const dependiaDeRecusaAvisada = g => [...g.ops.values()].every(op => {
+  if (versaoDepois(op) !== null) return true;
+  const r = op.seGrupo !== undefined ? RESULTADOS.get(op.seGrupo) : null;
+  return !!r && !r.ok && !r.semAviso;
+});
 /* Aviso do que não foi gravado porque outro aparelho mexeu antes. */
 function avisarRecusados(lista) {
+  // o aviso de sucesso (e o Desfazer) de uma gravação recusada some: a tela já mostra como ficou
+  $$('#toasts .toast').forEach(t => { if ((t._grupos || []).some(g => { const r = RESULTADOS.get(g.n); return r && !r.ok; })) t._sair(); });
   if (!lista.length) return;
   // "Feito" num item que o outro aparelho excluiu: a manutenção e o custo dela ficaram fora, e isso tem aviso próprio
   const manutFora = x => `Outro aparelho excluiu ${descricaoRegistro(x.col, x.d)}. A manutenção (e o custo) não foi gravada: se ela foi feita, registre em “Registrar manutenção avulsa”.`;
@@ -869,16 +896,32 @@ function aplicarRemoto(ev) {
   refazerVista(k);
   REV++; pedirRender();
 }
+/* A tela não se mexe embaixo do dedo: o que chega do outro aparelho (e a resposta do banco) espera o dedo soltar a tela ou
+   o mouse sair de cima de um botão, no máximo 2 s. Só logo depois de uma ação daqui (algo gravado neste aparelho, até 1,5 s:
+   ultimaAcao, marcada em grupoAberto) o mouse parado não segura nada; um clique que só navega, num lugar neutro ou uma tecla
+   não mudam isso. */
+let ponteiroApertado = false, soltarTimer = null, ultimoPonteiro = '';
+addEventListener('pointerdown', e => { clearTimeout(soltarTimer); ponteiroApertado = true; ultimoPonteiro = e.pointerType; }, true);
+addEventListener('pointermove', e => { ultimoPonteiro = e.pointerType; }, { capture: true, passive: true });
+['pointerup', 'pointercancel'].forEach(ev => addEventListener(ev, () => { clearTimeout(soltarTimer); soltarTimer = setTimeout(() => { ponteiroApertado = false; }, 60); }, true));
+addEventListener('blur', () => { ponteiroApertado = false; });
+const telaEmUso = () => ponteiroApertado || (ultimoPonteiro === 'mouse' && Date.now() - ultimaAcao > 1500 &&
+  !!document.querySelector('#main button:hover, #main a.btn:hover'));
+let renderPedidoEm = 0;
 function pedirRender() {
   clearTimeout(renderTimer);
-  renderTimer = setTimeout(() => {
+  if (!renderPedidoEm) renderPedidoEm = Date.now();
+  const tentar = () => {
     // não redesenha por baixo de quem está digitando: espera a janela fechar ou o campo perder o foco
     const ae = document.activeElement;
     const digitando = ae && ae.closest && ae.closest('#main') && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);
-    if ($('#modal.open') || digitando) renderPendente = true;
-    else if (paginaAtual() === 'perfil' && typeof renderMantendoPerfil === 'function') renderMantendoPerfil();   // não perde o que foi digitado e não salvo
+    if ($('#modal.open') || digitando) { renderPendente = true; renderPedidoEm = 0; return; }
+    if (telaEmUso() && Date.now() - renderPedidoEm < 2000) { renderTimer = setTimeout(tentar, 120); return; }
+    renderPedidoEm = 0;
+    if (paginaAtual() === 'perfil' && typeof renderMantendoPerfil === 'function') renderMantendoPerfil();   // não perde o que foi digitado e não salvo
     else render();
-  }, 200);
+  };
+  renderTimer = setTimeout(tentar, 200);
 }
 document.addEventListener('focusout', () => { if (renderPendente) setTimeout(() => { if (renderPendente && !$('#modal.open')) pedirRender(); }, 400); });
 /* recarga = true: atualização com o sistema já aberto. Se algo mudou aqui (ou chegou de outro aparelho) enquanto a
@@ -923,7 +966,7 @@ document.addEventListener('visibilitychange', () => {
 /* ---------- Versão nova publicada ----------
    Uma aba aberta continua na versão antiga até ser recarregada. Ao voltar para a aba (no máximo a cada 5 minutos) e a
    cada 30 minutos, confere o número da versão publicada e, se houver uma mais nova, oferece atualizar. */
-const VERSAO = 16;
+const VERSAO = 17;
 let avisouVersao = false, conferidoEm = 0;
 async function conferirVersao(forcar = false) {
   if (DEMO || avisouVersao || !$('#main') || (!forcar && Date.now() - conferidoEm < 5 * 60000)) return;
@@ -1139,8 +1182,17 @@ const selo = (txt, tipo = 'mute') => `<span class="selo s-${tipo}">${esc(txt)}</
 const corSegura = c => (/^#[0-9a-f]{3,8}$/i.test(String(c || '')) ? String(c) : '#888888');     // só cor em hexadecimal entra em style
 const cor = c => `<span class="dot" style="background:${corSegura(c)}"></span>`;
 const kpi = (rotulo, valor, detalhe = '', cls = '') => `<div class="kpi"><span>${rotulo}</span><strong class="${cls}">${valor}</strong>${detalhe ? `<em>${detalhe}</em>` : ''}</div>`;
-/* tabela(['Data', { t: 'Valor', r: 1 }], linhasHTML) — r: 1 alinha a coluna à direita */
-const tabela = (cols, linhas) => `<div class="scroll"><table><thead><tr>${cols.map(c => typeof c === 'string' ? `<th>${c}</th>` : `<th class="${c.r ? 'right' : ''}">${c.t}</th>`).join('')}</tr></thead><tbody>${linhas}</tbody></table></div>`;
+/* tabela(['Data', { t: 'Valor', r: 1 }], linhasHTML) — r: 1 alinha a coluna à direita. No celular a tabela rola de lado e a
+   coluna do nome da linha fica presa (preso-N): a marcada com nome: 1 ou a primeira que não é data, número ou tipo (em
+   Compras, o filamento; em Pedidos, os itens). */
+const COL_SEM_NOME = /^(Data|Nº|Vencimento|Tipo)$/;
+const tabela = (cols, linhas) => {
+  const rot = c => String(typeof c === 'string' ? c : (c && c.t) || '').trim();
+  let preso = cols.findIndex(c => c && typeof c === 'object' && c.nome);
+  if (preso < 0) preso = cols.findIndex(c => !COL_SEM_NOME.test(rot(c)));
+  if (preso < 0 || preso > 3) preso = 0;
+  return `<div class="scroll preso-${preso + 1}"><table><thead><tr>${cols.map(c => typeof c === 'string' ? `<th>${c}</th>` : `<th class="${c.r ? 'right' : ''}">${c.t}</th>`).join('')}</tr></thead><tbody>${linhas}</tbody></table></div>`;
+};
 /* seletorMes('2026-11', 'minhaFuncao') — lista de meses (24 para trás, 1 para frente); ao trocar chama minhaFuncao('AAAA-MM').
    Usado no lugar de <input type="month">, que não funciona em todos os navegadores. */
 function seletorMes(valor, fn, rotulo = 'Mês') {
@@ -1153,15 +1205,139 @@ function seletorMes(valor, fn, rotulo = 'Mês') {
 /* medidor(72) — barra de progresso; tipo: '' | 'warn' | 'bad' | 'ok' */
 const medidor = (p, tipo = '') => `<div class="meter ${tipo}" role="img" aria-label="${pct(p)}"><i style="width:${Math.max(0, Math.min(100, num(p)))}%"></i></div>`;
 
-function toast(msg, tipo = '') {
+/* ---------- Avisos (toast) e Desfazer ----------
+   toast(texto, tipo, acao): o aviso fica o tempo de ler, longe dos botões de trabalho (no celular, no alto, ao lado do botão do
+   menu, que fica livre; no computador, no canto de baixo à esquerda da área de trabalho, fora do menu e longe dos botões das
+   linhas, que ficam à direita). Tocar no aviso só fecha o aviso: o toque nunca passa para o que está
+   embaixo dele. tipo: '' (feito), 'warn' ou 'bad' (importantes: de 6 a 16 s conforme o tamanho do texto, com ✕ para fechar).
+   acao: { rotulo, fn, grupos, mudou }: botão (o Desfazer) por 8 s, um por vez; depois de uma ação feita pelo teclado, o
+   cursor vai para ele. O aviso de sucesso de uma gravação que o banco recusar some sozinho (avisarRecusados). */
+let ultimoTeclado = 0;           // último botão apertado pelo teclado (Enter ou espaço)
+function toast(msg, tipo = '', acao) {
   let cx = $('#toasts');
   if (!cx) { cx = document.createElement('div'); cx.id = 'toasts'; cx.setAttribute('role', 'status'); cx.setAttribute('aria-live', 'polite'); document.body.appendChild(cx); }
-  const t = document.createElement('div');
-  t.className = 'toast ' + tipo; t.textContent = msg;
+  const grave = tipo === 'bad' || tipo === 'warn', texto = String(msg ?? '');
+  const ms = acao ? 8000 : Math.min(16000, Math.max(grave ? 6000 : 3200, 1000 + texto.length * (grave ? 62 : 45)));
+  const t = document.createElement('div'), tx = document.createElement('span');
+  t.className = 'toast ' + tipo; t.style.setProperty('--tempo', ms + 'ms');
+  tx.textContent = texto; t.appendChild(tx);
+  let fim = 0;
+  const sair = () => { clearTimeout(fim); t.remove(); };
+  fim = setTimeout(sair, ms);
+  t._sair = sair;
+  // grupos de gravação deste aviso: os da ação (Desfazer) ou o do clique em andamento
+  t._grupos = acao ? (acao.grupos || []) : !grave && grupoAtual && grupoAtual.ops.size ? [grupoAtual] : [];
+  t.addEventListener('click', e => { if (!e.target.closest('button')) sair(); });   // tocar no texto só fecha o aviso
+  let foco = null;
+  if (acao) {
+    $$('.toast.com-acao', cx).forEach(x => x._sair());
+    t.classList.add('com-acao');
+    const b = document.createElement('button'), desde = Date.now();
+    b.type = 'button'; b.className = 'btn ghost sm'; b.textContent = acao.rotulo || 'Desfazer';
+    // a mesma tecla repetida que fez a ação (Enter duas vezes) não desfaz na hora
+    b.onclick = e => { if (e && e.isTrusted && e.detail === 0 && Date.now() - desde < 500) return; sair(); usarAcaoDoAviso(acao); };
+    t.appendChild(b);
+    if (Date.now() - ultimoTeclado < 1500 && !$('#modal.open')) foco = b;
+  } else if (grave) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'x'; b.setAttribute('aria-label', 'Fechar aviso'); b.textContent = '✕'; b.onclick = sair;
+    t.appendChild(b);
+  }
   cx.appendChild(t);
-  setTimeout(() => t.remove(), tipo === 'bad' || tipo === 'warn' ? 6000 : 3200);
+  if (foco) { try { foco.focus({ preventScroll: true }); } catch (e) { /* sem foco: segue */ } }
+  return t;
 }
+/* Os grupos de uma ação ainda estão como ela gravou? Sem resposta do banco: sim (o que vier depois espera por eles).
+   Recusados: não. Gravados: só se nenhum movimento deles (ordem, pedido, conta...) mudou depois, aqui ou em outro aparelho.
+   O estoque não conta: ele é somado no banco, e desfazer devolve só o que a ação somou. */
+function gravacaoValeAinda(grupos) {
+  return grupos.every(g => {
+    const r = RESULTADOS.get(g.n);
+    if (!r) return !g.ops.size || FILA.includes(g) || VOO.includes(g);
+    if (!r.ok) return false;
+    return [...g.ops.keys()].filter(k => COM_VERSAO.has(k.slice(0, k.indexOf('/')))).every(k => {
+      const v = r.versoes.get(k), b = BASE.get(k);
+      return v === undefined || (v === -1 ? !b : !!b && b.v === v);
+    });
+  });
+}
+function usarAcaoDoAviso(acao) {
+  if (!gravacaoValeAinda(acao.grupos || [])) { render(); toast(acao.mudou || 'Isto já mudou depois. Nada foi desfeito.', 'bad'); return; }
+  novoGrupo();
+  acao.fn();
+}
+/* Desfazer por 8 s: marca = marcaDesfazer() antes da ação e, depois dela, avisoDesfazer(texto, marca, fn). Os grupos gravados
+   depois da marca são os da ação; fn desfaz com as funções de sempre (reabrirOrdem, excluirOrdem...) e confere o estado. */
+function marcaDesfazer() {
+  novoGrupo();
+  return grupoAtual ? grupoAtual.n - 1 : seqGrupo;
+}
+const avisoDesfazer = (msg, marca, fn, rotulo = 'Desfazer') => toast(msg, '', { rotulo, fn, grupos: FILA.filter(g => g.n > marca) });
 const confirmar = msg => window.confirm(msg);
+
+/* ---------- Pergunta curta com botões grandes (no lugar do OK/Cancelar do navegador) ----------
+   perguntar(titulo, textoHTML, [{ rotulo, fn, cls, foco }]): cls '' = botão vermelho (o que vai acontecer); sem cls, discreto;
+   sem fn, só fecha; foco: true = o cursor começa nele (o Enter faz o que ele diz, como o OK que a pergunta substitui; sem
+   nenhum marcado, o primeiro). O cursor nunca deve começar num botão que joga fora o que a pessoa digitou. Os nomes no texto
+   passam por esc(). Com um formulário aberto, a pergunta aparece no lugar dele, e o ✕ (ou Esc) volta ao formulário como
+   estava. No celular a pergunta sobe do rodapé: o último botão fica onde estava o Salvar, e o segundo toque de quem tocou
+   duas vezes no Salvar cai nele (ele não pode ser o que grava outra vez). */
+let PERGUNTA = null;
+function perguntar(titulo, texto, botoes) {
+  const m = $('#modal'), form = FORM && FORM.form && m.classList.contains('open') && m.contains(FORM.form) ? FORM.form : null;
+  const corpo = `<p class="pergunta-txt">${texto}</p><div class="pergunta-botoes">${botoes.map((b, i) =>
+    `<button type="button" class="btn ${b.cls === undefined ? 'ghost' : b.cls}" data-i="${i}" onclick="responder(${i}, event)">${esc(b.rotulo)}</button>`).join('')}</div>`;
+  if (form) {
+    if (PERGUNTA && PERGUNTA.caixa) PERGUNTA.caixa.remove();
+    form.hidden = true;
+    const c = document.createElement('div');
+    c.className = 'caixa pergunta';
+    c.innerHTML = `<div class="modal-head"><h3>${esc(titulo)}</h3><button type="button" class="x" onclick="responder(-1)" aria-label="Voltar">✕</button></div>${corpo}`;
+    m.appendChild(c);
+    PERGUNTA = { botoes, caixa: c, form, desde: Date.now() };
+    janelaAbertaEm = Date.now();                     // o mesmo toque duplo que abriu a pergunta não a fecha
+  } else {
+    abrirModal(corpo, { title: titulo });
+    $('.caixa', m).classList.add('pergunta');
+    PERGUNTA = { botoes, desde: Date.now() };
+  }
+  // no celular, como nas janelas, o cursor não vai para botão nenhum (o toque decide e nada fica marcado como se fosse o certo)
+  const bs = $$('.pergunta-botoes .btn', m), b = bs[Math.max(0, botoes.findIndex(x => x.foco))];
+  if (b && !('ontouchstart' in window)) b.focus();
+}
+function responder(i, e) {
+  const p = PERGUNTA;
+  if (!p) return;
+  // Enter (ou espaço) apertado logo depois de a pergunta aparecer, sem tempo de ler, não responde: dois Enter seguidos no
+  // Salvar de uma ordem igual não criam a segunda (quem leu aperta de novo)
+  if (i >= 0 && e && e.isTrusted && e.detail === 0 && Date.now() - (p.desde || 0) < 500) return;
+  PERGUNTA = null;
+  const b = i >= 0 ? p.botoes[i] : null;
+  if (p.form) { p.caixa.remove(); p.form.hidden = false; } else fecharModal();
+  if (b && b.fn) b.fn();
+  else if (p.form) { const s = $('button[type=submit]', p.form); if (s) s.focus(); }
+}
+
+/* ---------- Toque repetido ----------
+   Até 0,7 s depois de um toque (ou clique), outro no mesmo lugar (até 40 px) não vale se a tela mudou embaixo dele (o controle
+   tocado sumiu ou foi redesenhado, ou uma janela, uma pergunta ou o menu abriu ou fechou) e ele cairia em outro controle. Ex.:
+   dois toques rápidos em Iniciar não concluem a ordem. O mesmo controle redesenhado no mesmo lugar vale (de propósito), e pelo
+   teclado nada muda: clique com detail 0 nunca é barrado. */
+let toqueAnterior = null;
+const chaveDoControle = el => [el.getAttribute('onclick') || el.getAttribute('href') || el.type || el.tagName, el.dataset.id || '',
+  el.dataset.i || el.dataset.k || el.dataset.mover || el.dataset.addRow || '', el.getAttribute('aria-label') || ''].join('|');
+const estadoDaTela = () => [!!$('#modal.open'), !!PERGUNTA, document.body.classList.contains('nav-open')].join('|');
+document.addEventListener('click', e => {
+  if (e.isTrusted && e.detail === 0 && e.target && e.target.closest && e.target.closest('button,a')) ultimoTeclado = Date.now();
+  if (!e.isTrusted || !(e.detail > 0) || !e.target || !e.target.closest) return;
+  const el = e.target.closest('button,a,summary,label,select,[onclick]'), agora = Date.now(), tela = estadoDaTela(), a = toqueAnterior;
+  if (a && agora - a.t < 700 && Math.hypot(e.clientX - a.x, e.clientY - a.y) < 40 &&
+    (!a.el.isConnected || !a.el.getClientRects().length || a.tela !== tela) && (!el || chaveDoControle(el) !== a.k)) {
+    e.preventDefault(); e.stopImmediatePropagation();
+    return;
+  }
+  if (el) toqueAnterior = { t: agora, x: e.clientX, y: e.clientY, k: chaveDoControle(el), el, tela };
+}, true);
 
 /* ---------- Janela (modal) e formulários ---------- */
 let FORM = null;
@@ -1187,7 +1363,7 @@ function fecharModal() {
   const m = $('#modal');
   m.classList.remove('open'); m.innerHTML = '';
   document.body.classList.remove('modal-aberto');
-  FORM = null;
+  FORM = null; PERGUNTA = null;
   const app = $('#app'); if (app) app.inert = false;
   if (focoAntes && document.contains(focoAntes)) { try { focoAntes.focus(); } catch (e) { /* elemento sumiu */ } }
   focoAntes = null;
@@ -1384,7 +1560,22 @@ function openForm(o) {
   });
   atualizar();
   hidratarImagens(m);
-  if (!('ontouchstart' in window)) { const p = $('input:not([type=file]):not([type=checkbox]),select,textarea', form); if (p) p.focus(); }
+  if (!('ontouchstart' in window)) {
+    const p = focoInicial(form, o.foco);
+    if (p) { p.focus(); if (p.dataset && p.dataset.num && p.select) p.select(); }   // número já preenchido: digitar troca o valor
+  }
+}
+/* Onde o cursor começa ao abrir uma janela: no primeiro campo de número ou de texto que a pessoa precisa preencher (o
+   obrigatório ainda vazio; senão o primeiro de cima para baixo, como a quantidade do pedido), nunca numa data: digitar "2"
+   logo ao abrir Vender gravava a venda no dia 2. foco (opcional): o nome do campo em que a janela começa, quando é outro
+   (ex.: o orçamento começa na lista Cliente, e digitar já escolhe o cliente; o nome avulso é só para quem não é cadastrado). */
+function focoInicial(form, foco) {
+  const pedido = foco ? campoDoForm(form, foco) : null;
+  if (pedido && pedido.getClientRects && pedido.getClientRects().length && !pedido.disabled) return pedido;
+  const campos = $$('.grid input, .grid select, .grid textarea', form).filter(e => !e.disabled && e.getClientRects().length &&
+    !['date', 'month', 'hidden', 'file', 'checkbox', 'radio', 'color'].includes(e.type));
+  const escrever = campos.filter(e => e.tagName !== 'SELECT');
+  return escrever.find(e => e.required && !e.value.trim()) || escrever[0] || campos[0] || $('button[type=submit]', form);
 }
 function pintarArquivo(box, v) {
   const tem = v && v.path, img = $('.thumb', box);
@@ -1422,12 +1613,12 @@ function setLinhas(k, linhas) {
 }
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape' || !$('#modal.open')) return;
-  if (FORM) fecharForm(); else fecharModal();
+  if (PERGUNTA) responder(-1); else if (FORM) fecharForm(); else fecharModal();
 });
 document.addEventListener('mousedown', e => {
   if (e.target.id !== 'modal' || e.offsetX >= e.target.clientWidth) return;      // clique na barra de rolagem não fecha
   if (Date.now() - janelaAbertaEm < 600) return;                                 // o mesmo toque duplo que abriu a janela não a fecha
-  if (FORM) { if (!FORM.sujo) fecharForm(); } else fecharModal();
+  if (PERGUNTA) responder(-1); else if (FORM) { if (!FORM.sujo) fecharForm(); } else fecharModal();
 });
 
 /* ---------- Impressão (orçamento em PDF pelo "Salvar como PDF" do navegador) ---------- */

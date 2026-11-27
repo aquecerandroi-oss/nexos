@@ -127,7 +127,7 @@ VIEWS.financeiro = function () {
     ${gesPainelSocios()}
     <div class="panel">
       <div class="panel-head"><h2>Lançamentos</h2>${lancs.length ? `<span class="muted txt-sm">${resumoLanc}</span>` : ''}</div>
-      ${lancs.length ? tabela(['Data', 'Tipo', 'Categoria ou sócio', 'Descrição', 'Repete', { t: 'Valor', r: 1 }, ''], linhasLanc) : semLancamentos}
+      ${lancs.length ? tabela(['Data', 'Tipo', 'Categoria ou sócio', { t: 'Descrição', nome: 1 }, 'Repete', { t: 'Valor', r: 1 }, ''], linhasLanc) : semLancamentos}
       ${avisoRateio}
       <p class="hint" style="margin-top:12px">Compras de filamento, reposição de insumos, manutenções, devoluções e contas pagas entram sozinhas no demonstrativo. Não precisa lançar de novo aqui.</p>
     </div>`;

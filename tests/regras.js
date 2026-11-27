@@ -526,6 +526,301 @@
   ok('formulário: na 2ª gravação a observação acertada fica, e status e quantidade entram',
     iguais(diferenca('ordens', { id: 'o', obs: 'nº 4', status: 'fila', qtd: 2 }, { id: 'o', obs: 'nº 3', status: 'concluido', qtd: 3 }, {}, { snap: snapO }, { t: 'mudar', p: [{ s: { status: 'fila' } }] }), { s: { status: 'concluido', qtd: 3 } }), 0);
 
+  // 32. versão 17, etapa 1: nada em dobro (código fixo em sugestão, falha, compra e reposição; ordem e pedido iguais perguntam),
+  // Desfazer, avisos e o cursor ao abrir a janela. O "outro PC" grava direto no banco local, como na seção 31.
+  // tenta(nomes, fn): se o bloco der erro (ex.: função que o código antigo não tem), cada verificação dele que faltou conta como falha
+  const tenta = async (nomes, fn) => {
+    const ja = R.length;
+    try { await fn(); } catch (e) {
+      const feitos = R.slice(ja).map(x => x.replace(/^(OK {2}|FALHOU )/, '').split(' -> ')[0]);
+      nomes.filter(n => !feitos.includes(n)).forEach(n => ok(n, false, 'erro: ' + String(e && e.message || e)));
+    }
+    if ($('#modal.open')) { if (FORM) FORM.sujo = false; fecharModal(); }
+  };
+  await carregarTudo();
+  const dia32 = hoje().replace(/-/g, ''), linhas32 = filtro => Object.values(DBDemo._ler().linhas).filter(l => filtro(l.d));
+  const bancoTexto = () => { const e = DBDemo._ler().linhas, o = {}; Object.keys(e).sort().forEach(k => { o[k] = e[k].d; }); return JSON.stringify(o); };
+  const avisos32 = () => $$('#toasts .toast').map(t => t.textContent);
+  put('filamentos', { id: 'fil-e1', nome: 'PLA Etapa Um', tipo: 'PLA', cor: '#123456', precoKg: 100, estoqueG: 1000 });
+  put('insumos', { id: 'ins-e1', nome: 'Caixa Etapa Um', unidade: 'un', custo: 1, estoque: 10, minimo: 0 });
+  put('produtos', { id: 'prod-e1', nome: 'Vaso Etapa Um', materiais: [{ filamentoId: 'fil-e1', pesoG: 10 }], horas: 1, estoque: 0, estoqueMinimo: 4, precos: { direta: 30 } });
+  put('produtos', { id: 'prod-e1b', nome: 'Luminária Etapa Um', materiais: [{ filamentoId: 'fil-e1', pesoG: 20 }], horas: 1, estoque: 5, precos: { direta: 50 } });
+  await pausa();
+  const dCompra = { data: hoje(), filamentoId: 'fil-e1', fornecedorId: '', pesoG: 1000, valor: 104.5 };
+  await tenta(['nada em dobro: o código da compra é o material, o dia, o peso, o valor e um contador', 'nada em dobro: registrarCompra aceita o código de fora',
+    'nada em dobro: a mesma compra feita no outro PC entra uma vez (estoque +1 kg uma vez)', 'nada em dobro: o aviso diz que o outro aparelho já registrou e nada entrou em dobro',
+    'nada em dobro: com a primeira já na tela, a segunda compra igual ganha outro código e entra'], async () => {
+    const cod = codigoCompra(dCompra);
+    ok('nada em dobro: o código da compra é o material, o dia, o peso, o valor e um contador', cod === `cp-fil-e1-${dia32}-100000-10450-0`, cod);
+    outroPC([{ n: 11, ops: [{ c: 'compras', i: cod, t: 'novo', d: { ...dCompra, precoKg: 104.5, obs: '', criadoEm: agoraISO() } }, { c: 'filamentos', i: 'fil-e1', t: 'mudar', p: [{ a: { estoqueG: 1000 } }] }] }]);
+    const c = registrarCompra({ ...dCompra, id: cod });                                   // este PC salva a mesma compra sem saber
+    ok('nada em dobro: registrarCompra aceita o código de fora', c.id === cod, c.id);
+    await pausa(300);
+    ok('nada em dobro: a mesma compra feita no outro PC entra uma vez (estoque +1 kg uma vez)', noBanco('filamentos', 'fil-e1').estoqueG === 2000 && byId('filamentos', 'fil-e1').estoqueG === 2000 &&
+      linhas32(d => /^cp-fil-e1-/.test(d.id)).length === 1, [noBanco('filamentos', 'fil-e1').estoqueG, byId('filamentos', 'fil-e1').estoqueG]);
+    ok('nada em dobro: o aviso diz que o outro aparelho já registrou e nada entrou em dobro', avisos32().some(t => /Outro aparelho já tinha registrado a compra de 1 kg de PLA Etapa Um\. Nada foi gravado em dobro/.test(t)), avisos32().slice(-2));
+    ok('nada em dobro: com a primeira já na tela, a segunda compra igual ganha outro código e entra', codigoCompra(dCompra) === `cp-fil-e1-${dia32}-100000-10450-1`, codigoCompra(dCompra));
+  });
+  await tenta(['nada em dobro: o código da reposição vai no lançamento do gasto', 'nada em dobro: a mesma reposição feita no outro PC entra uma vez (estoque 10 + 5)'], async () => {
+    const cod = codigoReposicao('ins-e1', 5, 20, hoje());
+    ok('nada em dobro: o código da reposição vai no lançamento do gasto', cod === `rp-ins-e1-${dia32}-5000-2000-0`, cod);
+    outroPC([{ n: 12, ops: [{ c: 'lancamentos', i: cod, t: 'novo', d: { data: hoje(), tipo: 'gasto', categoria: 'Insumos', descricao: 'Reposição: Caixa Etapa Um (5 un)', valor: 20, fixo: false, criadoEm: agoraISO() } },
+      { c: 'insumos', i: 'ins-e1', t: 'mudar', p: [{ a: { estoque: 5 } }] }] }]);
+    reporInsumo(byId('insumos', 'ins-e1'), 5, 20, hoje(), cod);
+    await pausa(300);
+    ok('nada em dobro: a mesma reposição feita no outro PC entra uma vez (estoque 10 + 5)', noBanco('insumos', 'ins-e1').estoque === 15 && byId('insumos', 'ins-e1').estoque === 15 &&
+      linhas32(d => /^rp-ins-e1-/.test(d.id)).length === 1, [noBanco('insumos', 'ins-e1').estoque, linhas32(d => /^rp-ins-e1-/.test(d.id)).length]);
+  });
+  await tenta(['nada em dobro: o código da ordem da sugestão é o produto e quantas ordens ele já teve', 'nada em dobro: a ordem da mesma sugestão criada nos dois PCs entra uma vez'], async () => {
+    const cod = codigoSugestao('prod-e1');
+    ok('nada em dobro: o código da ordem da sugestão é o produto e quantas ordens ele já teve', cod === 'sg-prod-e1-0', cod);
+    outroPC([{ n: 13, ops: [{ c: 'ordens', i: cod, t: 'novo', d: { produtoId: 'prod-e1', qtd: 4, status: 'fila', data: hoje(), prazo: '', clienteId: '', obs: '', criadoEm: agoraISO(), ordem: Date.now() + 1e6 } }] }]);
+    opCriarSugerida('prod-e1', 4);                                                      // a janela de sempre, com a quantidade
+    $('#modal form').requestSubmit();
+    await pausa(300);
+    ok('nada em dobro: a ordem da mesma sugestão criada nos dois PCs entra uma vez', linhas32(d => d.produtoId === 'prod-e1').length === 1 && S.ordens.filter(o => o.produtoId === 'prod-e1').length === 1,
+      linhas32(d => d.produtoId === 'prod-e1').map(d => d.id));
+  });
+  let oF = null;
+  await tenta(['falha da ordem: o código é a ordem, o filamento e quantas falhas ela já teve', 'falha da ordem: guarda a ordem, a ordem conta 1 falha e o filamento baixa', 'falha da ordem: a próxima falha dela ganha outro código',
+    'nada em dobro: a mesma falha registrada nos dois PCs entra uma vez (o filamento baixa uma vez)'], async () => {
+    oF = novaOrdem({ produtoId: 'prod-e1b', qtd: 2 }); iniciarOrdem(oF);
+    await pausa();
+    const n0 = falhasDaOrdem(byId('ordens', oF.id)), cod = codigoFalha(byId('ordens', oF.id), 'fil-e1', n0), fil0 = byId('filamentos', 'fil-e1').estoqueG;
+    ok('falha da ordem: o código é a ordem, o filamento e quantas falhas ela já teve', cod === 'fa-' + oF.id + '-fil-e1-0' && n0 === 0, cod);
+    registrarFalha({ id: cod, ordemId: oF.id, data: hoje(), produtoId: 'prod-e1b', filamentoId: 'fil-e1', gramas: 15, motivo: 'Entupimento' });
+    await pausa();
+    ok('falha da ordem: guarda a ordem, a ordem conta 1 falha e o filamento baixa', (noBanco('falhas', cod) || {}).ordemId === oF.id && noBanco('ordens', oF.id).falhas === 1 &&
+      noBanco('ordens', oF.id).status === 'imprimindo' && noBanco('filamentos', 'fil-e1').estoqueG === fil0 - 15, [noBanco('falhas', cod), noBanco('ordens', oF.id).falhas]);
+    const cod2 = codigoFalha(byId('ordens', oF.id), 'fil-e1', falhasDaOrdem(byId('ordens', oF.id)));
+    ok('falha da ordem: a próxima falha dela ganha outro código', cod2 === 'fa-' + oF.id + '-fil-e1-1', cod2);
+    outroPC([{ n: 14, ops: [{ c: 'filamentos', i: 'fil-e1', t: 'mudar', p: [{ a: { estoqueG: -15 } }] }, { c: 'falhas', i: cod2, t: 'novo', d: { data: hoje(), produtoId: 'prod-e1b', filamentoId: 'fil-e1', gramas: 15, motivo: 'Entupimento', ordemId: oF.id, custo: 1.5, criadoEm: agoraISO() } },
+      { c: 'ordens', i: oF.id, t: 'mudar', p: [{ s: { falhas: 2 } }] }] }]);
+    registrarFalha({ id: cod2, ordemId: oF.id, data: hoje(), produtoId: 'prod-e1b', filamentoId: 'fil-e1', gramas: 15, motivo: 'Entupimento' });
+    await pausa(300);
+    ok('nada em dobro: a mesma falha registrada nos dois PCs entra uma vez (o filamento baixa uma vez)', noBanco('filamentos', 'fil-e1').estoqueG === fil0 - 30 && linhas32(d => d.ordemId === oF.id).length === 2 &&
+      noBanco('ordens', oF.id).falhas === 2 && byId('filamentos', 'fil-e1').estoqueG === fil0 - 30, [noBanco('filamentos', 'fil-e1').estoqueG, fil0, linhas32(d => d.ordemId === oF.id).length]);
+  });
+  // limpa os avisos da tela (para ler só os que a cena seguinte mostrar)
+  const limparAvisos = () => $$('#toasts .toast').forEach(t => (t._sair ? t._sair() : t.remove()));
+  await tenta(['falha da ordem: o outro aparelho mudou a ordem antes (voltou para a fila): a falha e a baixa do filamento entram do mesmo jeito, sem aviso',
+    'falha da ordem: a perda de outro filamento da mesma ordem, registrada ao mesmo tempo no outro aparelho, entra também'], async () => {
+    put('filamentos', { id: 'fil-e2', nome: 'PETG Etapa Um', tipo: 'PETG', cor: '#654321', precoKg: 120, estoqueG: 1000 });
+    const o = novaOrdem({ produtoId: 'prod-e1b', qtd: 1 }); iniciarOrdem(o);
+    await pausa();
+    const fil0 = noBanco('filamentos', 'fil-e1').estoqueG, l = DBDemo._ler().linhas['ordens/' + o.id], n = falhasDaOrdem(byId('ordens', o.id));
+    outroPC([{ n: 21, ops: [{ c: 'ordens', i: o.id, t: 'mudar', se: l.v, p: [{ s: { status: 'fila', inicio: '' } }] }] }]);   // este PC ainda não sabe
+    limparAvisos();
+    const cod = codigoFalha(byId('ordens', o.id), 'fil-e1', n);
+    registrarFalha({ id: cod, ordemId: o.id, data: hoje(), produtoId: 'prod-e1b', filamentoId: 'fil-e1', gramas: 12, motivo: 'Entupimento' });
+    await pausa(300);
+    ok('falha da ordem: o outro aparelho mudou a ordem antes (voltou para a fila): a falha e a baixa do filamento entram do mesmo jeito, sem aviso',
+      !!noBanco('falhas', cod) && noBanco('filamentos', 'fil-e1').estoqueG === fil0 - 12 && noBanco('ordens', o.id).status === 'fila' && noBanco('ordens', o.id).falhas === 1 &&
+      byId('ordens', o.id).status === 'fila' && !avisos32().some(t => /Outro aparelho|não foi gravad/.test(t)), [!!noBanco('falhas', cod), noBanco('filamentos', 'fil-e1').estoqueG, fil0, noBanco('ordens', o.id), avisos32()]);
+    const n2 = falhasDaOrdem(byId('ordens', o.id)), outro = codigoFalha(byId('ordens', o.id), 'fil-e2', n2), meu = codigoFalha(byId('ordens', o.id), 'fil-e1', n2);
+    const pla0 = noBanco('filamentos', 'fil-e1').estoqueG, petg0 = noBanco('filamentos', 'fil-e2').estoqueG;
+    outroPC([{ n: 22, ops: [{ c: 'filamentos', i: 'fil-e2', t: 'mudar', p: [{ a: { estoqueG: -40 } }] }, { c: 'falhas', i: outro, t: 'novo', d: { data: hoje(), produtoId: 'prod-e1b', filamentoId: 'fil-e2', gramas: 40, motivo: 'Entupimento', ordemId: o.id, custo: 4.8, criadoEm: agoraISO() } },
+      { c: 'ordens', i: o.id, t: 'mudar', p: [{ s: { falhas: n2 + 1 } }] }] }]);
+    registrarFalha({ id: meu, ordemId: o.id, data: hoje(), produtoId: 'prod-e1b', filamentoId: 'fil-e1', gramas: 30, motivo: 'Entupimento' });
+    await pausa(300);
+    ok('falha da ordem: a perda de outro filamento da mesma ordem, registrada ao mesmo tempo no outro aparelho, entra também', outro !== meu && !!noBanco('falhas', outro) && !!noBanco('falhas', meu) &&
+      noBanco('filamentos', 'fil-e1').estoqueG === pla0 - 30 && noBanco('filamentos', 'fil-e2').estoqueG === petg0 - 40 && linhas32(d => d.ordemId === o.id).length === 3,
+      [outro, meu, noBanco('filamentos', 'fil-e1').estoqueG, pla0, linhas32(d => d.ordemId === o.id).length]);
+  });
+  await tenta(['Produção: a ordem que já falhou mostra "Falhou 2 vezes" na fila', 'Falhou: a janela avisa que a ordem já tem falha registrada'], async () => {
+    const x = filaProducao().find(y => y.o.id === oF.id);
+    ok('Produção: a ordem que já falhou mostra "Falhou 2 vezes" na fila', !!x && /Falhou 2 vezes/.test(opLinhaFila(x, [], false)), x && opLinhaFila(x, [], false).slice(0, 300));
+    opFalhou(oF.id);
+    ok('Falhou: a janela avisa que a ordem já tem falha registrada', /Esta ordem já tem 2 falhas registradas: a última, 15 g de PLA Etapa Um, agora há pouco/.test(($('#modal form .aviso') || {}).textContent || ''), ($('#modal form .aviso') || {}).textContent);
+  });
+  await tenta(['nada em dobro: a compra do outro PC que chega com a janela aberta não entra de novo (o código é contado ao abrir a janela) e quem salva é avisado',
+    'nada em dobro: a reposição do outro PC que chega com a janela aberta não entra de novo, e quem salva é avisado'], async () => {
+    const est0 = noBanco('filamentos', 'fil-e1').estoqueG, n0 = linhas32(d => /^cp-fil-e1-/.test(d.id)).length;
+    cadNovaCompra('fil-e1');                                        // a janela abre: os códigos que estão na tela são contados agora
+    setCampo('pesoG', 500); setCampo('valor', 61);
+    const cod = codigoCompra({ data: hoje(), filamentoId: 'fil-e1', pesoG: 500, valor: 61 });
+    outroPC([{ n: 23, ops: [{ c: 'compras', i: cod, t: 'novo', d: { data: hoje(), filamentoId: 'fil-e1', fornecedorId: '', pesoG: 500, valor: 61, precoKg: 122, obs: '', criadoEm: agoraISO() } },
+      { c: 'filamentos', i: 'fil-e1', t: 'mudar', p: [{ a: { estoqueG: 500 } }] }] }]);
+    await carregarTudo(true);                                       // a compra do outro PC chega aqui com a janela aberta (a lista atrás não muda)
+    limparAvisos();
+    $('#modal form').requestSubmit();
+    await pausa(300);
+    ok('nada em dobro: a compra do outro PC que chega com a janela aberta não entra de novo (o código é contado ao abrir a janela) e quem salva é avisado',
+      linhas32(d => /^cp-fil-e1-/.test(d.id)).length === n0 + 1 && noBanco('filamentos', 'fil-e1').estoqueG === est0 + 500 && !$('#modal.open') &&
+      avisos32().some(t => /Outro aparelho já registrou esta compra \(500 g de PLA Etapa Um, R\$\s?61,00\) enquanto esta janela estava aberta\. Nada foi gravado em dobro/.test(t)),
+      [linhas32(d => /^cp-fil-e1-/.test(d.id)).length, n0, noBanco('filamentos', 'fil-e1').estoqueG, est0, avisos32()]);
+    const ins0 = noBanco('insumos', 'ins-e1').estoque, r0 = linhas32(d => /^rp-ins-e1-/.test(d.id)).length;
+    cadReporInsumo('ins-e1');
+    setCampo('qtd', 3); setCampo('valor', 9);
+    const codR = codigoReposicao('ins-e1', 3, 9, hoje());
+    outroPC([{ n: 24, ops: [{ c: 'lancamentos', i: codR, t: 'novo', d: { data: hoje(), tipo: 'gasto', categoria: 'Insumos', descricao: 'Reposição: Caixa Etapa Um (3 un)', valor: 9, fixo: false, criadoEm: agoraISO() } },
+      { c: 'insumos', i: 'ins-e1', t: 'mudar', p: [{ a: { estoque: 3 } }] }] }]);
+    await carregarTudo(true);
+    limparAvisos();
+    $('#modal form').requestSubmit();
+    await pausa(300);
+    ok('nada em dobro: a reposição do outro PC que chega com a janela aberta não entra de novo, e quem salva é avisado',
+      linhas32(d => /^rp-ins-e1-/.test(d.id)).length === r0 + 1 && noBanco('insumos', 'ins-e1').estoque === ins0 + 3 && avisos32().some(t => /Outro aparelho já registrou esta reposição .*Nada foi gravado em dobro/.test(t)),
+      [linhas32(d => /^rp-ins-e1-/.test(d.id)).length, r0, noBanco('insumos', 'ins-e1').estoque, ins0, avisos32()]);
+  });
+  await tenta(['nada em dobro: "Criar ordem" com a tela parada embaixo do mouse (a ordem da mesma sugestão chegou do outro PC, com outra quantidade) pergunta antes'], async () => {
+    put('produtos', { id: 'prod-e1c', nome: 'Caixinha Etapa Um', materiais: [{ filamentoId: 'fil-e1', pesoG: 5 }], horas: 0.5, estoque: 0, estoqueMinimo: 3, precos: { direta: 10 } });
+    await pausa();
+    const m = /data-id="prod-e1c" data-qtd="(\d+)" data-cod="([^"]+)"/.exec(opListaSugestoes(sugestoesProducao()));   // o botão como estava na tela
+    outroPC([{ n: 25, ops: [{ c: 'ordens', i: m[2], t: 'novo', d: { produtoId: 'prod-e1c', qtd: 8, status: 'fila', data: hoje(), prazo: '', clienteId: '', obs: '', criadoEm: agoraISO(), ordem: Date.now() + 3e6 } }] }]);
+    await carregarTudo(true);                                       // a ordem do outro PC chega; a tela ficou parada com o botão antigo
+    opCriarSugerida('prod-e1c', m[1], m[2]);
+    $('#modal form').requestSubmit();
+    await pausa(100);
+    const p = $('#modal .caixa.pergunta');
+    ok('nada em dobro: "Criar ordem" com a tela parada embaixo do mouse (a ordem da mesma sugestão chegou do outro PC, com outra quantidade) pergunta antes',
+      !!p && /8× Caixinha Etapa Um/.test(p.textContent) && S.ordens.filter(o => o.produtoId === 'prod-e1c').length === 1, [m && m[2], p && p.textContent]);
+  });
+  await tenta(['ordem igual: mesmo produto, quantidade e cliente, criada há pouco', 'ordem igual: quantidade diferente, outro cliente ou criada há mais tempo não contam'], async () => {
+    ok('ordem igual: mesmo produto, quantidade e cliente, criada há pouco', (ordemIgualRecente({ produtoId: 'prod-e1', qtd: 4, clienteId: '' }) || {}).id === 'sg-prod-e1-0', ordemIgualRecente({ produtoId: 'prod-e1', qtd: 4, clienteId: '' }));
+    put('ordens', { id: 'ord-velha-e1', produtoId: 'prod-e1', qtd: 9, status: 'fila', data: hoje(), prazo: '', clienteId: '', obs: '', criadoEm: new Date(Date.now() - 10 * 60000).toISOString(), ordem: Date.now() + 2e6 });
+    ok('ordem igual: quantidade diferente, outro cliente ou criada há mais tempo não contam', !ordemIgualRecente({ produtoId: 'prod-e1', qtd: 5, clienteId: '' }) &&
+      !ordemIgualRecente({ produtoId: 'prod-e1', qtd: 4, clienteId: 'outro' }) && !ordemIgualRecente({ produtoId: 'prod-e1', qtd: 9, clienteId: '' }), 0);
+  });
+  await tenta(['pedido igual: os mesmos produtos e quantidades, em qualquer ordem, e o mesmo cliente', 'pedido igual: outra quantidade não conta'], async () => {
+    const v = registrarVenda({ data: hoje(), canalId: 'direta', clienteId: '', itens: [{ produtoId: 'prod-e1', qtd: 2, precoUnit: 30 }, { produtoId: 'prod-e1b', qtd: 1, precoUnit: 50 }] });
+    ok('pedido igual: os mesmos produtos e quantidades, em qualquer ordem, e o mesmo cliente', (pedidoIgualRecente({ clienteId: '', itens: [{ produtoId: 'prod-e1b', qtd: 1 }, { produtoId: 'prod-e1', qtd: 2 }] }) || {}).id === v.id, 0);
+    ok('pedido igual: outra quantidade não conta', !pedidoIgualRecente({ clienteId: '', itens: [{ produtoId: 'prod-e1b', qtd: 1 }, { produtoId: 'prod-e1', qtd: 3 }] }), 0);
+    await pausa();
+  });
+  await tenta(['ordem igual: a janela pergunta com botões grandes, no lugar dela, antes de criar',
+    'ordem igual: o cursor começa em "Criar mais uma" (o Enter cria, como o OK) e "Não criar" é o último botão (no celular, onde estava o Salvar)',
+    'ordem igual: fechar a pergunta volta para a janela como estava', 'ordem igual: "Não criar" fecha a janela e avisa que nada entrou', 'ordem igual: "Criar mais uma" cria'], async () => {
+    opNovaOrdem('prod-e1', '', 4);
+    $('#modal form').requestSubmit();
+    await pausa(100);
+    const p = $('#modal .caixa.pergunta'), bs = p ? $$('.pergunta-botoes .btn', p) : [];
+    ok('ordem igual: a janela pergunta com botões grandes, no lugar dela, antes de criar', !!p && $('#modal form').hidden && bs.length === 2 && S.ordens.filter(o => o.produtoId === 'prod-e1' && num(o.qtd) === 4).length === 1, !!p);
+    ok('ordem igual: o cursor começa em "Criar mais uma" (o Enter cria, como o OK) e "Não criar" é o último botão (no celular, onde estava o Salvar)',
+      document.activeElement === bs[0] && /Criar mais uma/.test(bs[0].textContent) && /Não criar/.test((bs[1] || {}).textContent || ''), [document.activeElement && document.activeElement.textContent, bs.map(b => b.textContent)]);
+    responder(-1);
+    ok('ordem igual: fechar a pergunta volta para a janela como estava', !$('#modal .caixa.pergunta') && !$('#modal form').hidden && $('#modal [name=qtd]').value === '4', 0);
+    $('#modal form').requestSubmit();
+    await pausa(100);
+    limparAvisos();
+    responder(1);                                                    // Não criar
+    await pausa(100);
+    ok('ordem igual: "Não criar" fecha a janela e avisa que nada entrou', !$('#modal.open') && S.ordens.filter(o => o.produtoId === 'prod-e1' && num(o.qtd) === 4).length === 1 &&
+      avisos32().some(t => /^Nada foi criado\./.test(t)), avisos32());
+    opNovaOrdem('prod-e1', '', 4);
+    $('#modal form').requestSubmit();
+    await pausa(100);
+    responder(0);                                                    // Criar mais uma
+    await pausa(300);
+    ok('ordem igual: "Criar mais uma" cria', S.ordens.filter(o => o.produtoId === 'prod-e1' && num(o.qtd) === 4).length === 2 && linhas32(d => d.produtoId === 'prod-e1' && d.qtd === 4).length === 2, S.ordens.filter(o => o.produtoId === 'prod-e1').map(o => o.qtd));
+  });
+  const confirmarDeVerdade = window.confirm, perguntas32 = [];
+  let respostaConfirmar = true;
+  window.confirm = m => { perguntas32.push(String(m)); return respostaConfirmar; };     // as perguntas do navegador nesta seção
+  await tenta(['Desfazer: o Concluir mostra o botão Desfazer no aviso', 'Desfazer: com outra ordem imprimindo, pergunta antes de pôr as duas imprimindo (como o Iniciar)',
+    'Desfazer: o banco volta exatamente ao que era, com a mesma hora de início',
+    'Desfazer: se o outro aparelho mudou a ordem depois, nada é desfeito e o aviso explica', 'Desfazer: gravação recusada leva junto o aviso de sucesso e o Desfazer'], async () => {
+    const o = novaOrdem({ produtoId: 'prod-e1b', qtd: 3 }); iniciarOrdem(o);
+    await pausa();
+    const antes = bancoTexto(), inicio = byId('ordens', o.id).inicio;
+    opConcluir(o.id);
+    await pausa();
+    const b = $$('#toasts .toast.com-acao button').pop();
+    ok('Desfazer: o Concluir mostra o botão Desfazer no aviso', !!b && /Desfazer/.test(b.textContent) && bancoTexto() !== antes, avisos32().slice(-1));
+    perguntas32.length = 0;
+    b.click();
+    await pausa(300);
+    ok('Desfazer: com outra ordem imprimindo, pergunta antes de pôr as duas imprimindo (como o Iniciar)', perguntas32.length === 1 &&
+      /^Já existe outra ordem imprimindo \(.+\)\. Desfazendo, as duas ficam imprimindo\.\n\nDesfazer mesmo assim\?$/.test(perguntas32[0]), perguntas32);
+    ok('Desfazer: o banco volta exatamente ao que era, com a mesma hora de início', bancoTexto() === antes && byId('ordens', o.id).status === 'imprimindo' && byId('ordens', o.id).inicio === inicio, byId('ordens', o.id).status);
+    opConcluir(o.id);
+    await pausa();
+    const b2 = $$('#toasts .toast.com-acao button').pop(), l = DBDemo._ler().linhas['ordens/' + o.id];
+    outroPC([{ n: 15, ops: [{ c: 'ordens', i: o.id, t: 'mudar', se: l.v, p: [{ s: { obs: 'mexida no outro PC' } }] }] }]);
+    await carregarTudo(true);                                    // a mudança do outro PC chega aqui
+    const antes2 = bancoTexto();
+    b2.click();
+    await pausa(300);
+    ok('Desfazer: se o outro aparelho mudou a ordem depois, nada é desfeito e o aviso explica', bancoTexto() === antes2 && avisos32().some(t => /Isto já mudou depois\. Nada foi desfeito\./.test(t)), avisos32().slice(-2));
+    const o3 = novaOrdem({ produtoId: 'prod-e1b', qtd: 1 }); iniciarOrdem(o3);
+    await pausa();
+    const l3 = DBDemo._ler().linhas['ordens/' + o3.id];
+    outroPC([{ n: 16, ops: [{ c: 'ordens', i: o3.id, t: 'mudar', se: l3.v, p: [{ s: { status: 'concluido', fim: hoje() } }] }] }]);
+    opConcluir(o3.id);                                           // este PC ainda não sabe
+    const tinha = $$('#toasts .toast.com-acao').length;
+    await pausa(300);
+    ok('Desfazer: gravação recusada leva junto o aviso de sucesso e o Desfazer', tinha === 1 && !$$('#toasts .toast.com-acao').length && avisos32().some(t => /Outro aparelho mudou a ordem/.test(t)), tinha);
+  });
+  await tenta(['Desfazer: se o outro aparelho já vendeu as peças que o Concluir pôs no estoque, pergunta antes (o estoque ficaria negativo); "Cancelar" deixa tudo como está'], async () => {
+    const o = novaOrdem({ produtoId: 'prod-e1b', qtd: 4 }); iniciarOrdem(o);
+    await pausa();
+    opConcluir(o.id);
+    await pausa();
+    const b = $$('#toasts .toast.com-acao button').pop(), est = noBanco('produtos', 'prod-e1b').estoque;
+    outroPC([{ n: 26, ops: [{ c: 'produtos', i: 'prod-e1b', t: 'mudar', p: [{ a: { estoque: 1 - est } }] }] }]);   // o outro PC vende e sobra 1 peça
+    await carregarTudo(true);
+    const antes = bancoTexto();
+    perguntas32.length = 0; respostaConfirmar = false;
+    b.click();
+    await pausa(300);
+    respostaConfirmar = true;
+    ok('Desfazer: se o outro aparelho já vendeu as peças que o Concluir pôs no estoque, pergunta antes (o estoque ficaria negativo); "Cancelar" deixa tudo como está',
+      perguntas32.some(m => /Atenção: hoje há 1 peça pronta deste produto, então o estoque vai ficar negativo\.[\s\S]*Desfazer mesmo assim\?$/.test(m)) && bancoTexto() === antes &&
+      byId('ordens', o.id).status === 'concluido', [perguntas32, byId('ordens', o.id).status]);
+  });
+  await tenta(['Desfazer clicado antes da resposta de uma ação que o outro aparelho já tinha feito: um aviso só (o de que o outro mudou), sem "dependia de outra"'], async () => {
+    const o = novaOrdem({ produtoId: 'prod-e1b', qtd: 2 }); iniciarOrdem(o);
+    await pausa();
+    const l = DBDemo._ler().linhas['ordens/' + o.id];
+    outroPC([{ n: 27, ops: [{ c: 'ordens', i: o.id, t: 'mudar', se: l.v, p: [{ s: { status: 'concluido', fim: hoje() } }] }] }]);
+    limparAvisos();
+    opConcluir(o.id);                                               // este PC ainda não sabe
+    $$('#toasts .toast.com-acao button').pop().click();             // e desfaz antes da resposta do banco
+    await pausa(400);
+    const ruins = avisos32().filter(t => /Outro aparelho|não foi gravad|dependia/.test(t));
+    ok('Desfazer clicado antes da resposta de uma ação que o outro aparelho já tinha feito: um aviso só (o de que o outro mudou), sem "dependia de outra"',
+      ruins.length === 1 && /^Outro aparelho mudou a ordem de produção/.test(ruins[0]) && noBanco('ordens', o.id).status === 'concluido' && !avisos32().some(t => /^Desfeito/.test(t)), avisos32());
+  });
+  window.confirm = confirmarDeVerdade;
+  await tenta(['celular: a coluna presa da tabela é a do nome (Compras: o filamento; Pedidos: os itens; Contas: a descrição), não a da data ou do número'], async () => {
+    const preso = cols => (/class="scroll preso-(\d)"/.exec(tabela(cols, '')) || [])[1];
+    const r = [preso(['Data', 'Filamento', 'Fornecedor']), preso(['Nº', 'Data', 'Itens', 'Canal']), preso(['Produto', { t: 'Qtd', r: 1 }]), preso(['Vencimento', 'Descrição', { t: 'Valor', r: 1 }, '']),
+      preso(['Data', 'Tipo', 'Categoria ou sócio', { t: 'Descrição', nome: 1 }]), preso(['Mês', { t: 'Faturamento', r: 1 }])];
+    ok('celular: a coluna presa da tabela é a do nome (Compras: o filamento; Pedidos: os itens; Contas: a descrição), não a da data ou do número', r.join() === '2,3,1,2,4,1', r);
+  });
+  await tenta(['janelas: o orçamento começa na lista Cliente (digitar já escolhe o cliente cadastrado), novo ou editado'], async () => {
+    comEditarOrcamento();
+    const a = document.activeElement;
+    const novo = !!a && a.tagName === 'SELECT' && a.name === 'clienteId';
+    if (FORM) FORM.sujo = false; fecharModal();
+    const orc = S.orcamentos[0];
+    if (orc) comEditarOrcamento(orc.id);
+    const b = document.activeElement;
+    ok('janelas: o orçamento começa na lista Cliente (digitar já escolhe o cliente cadastrado), novo ou editado', novo && (!orc || (b.tagName === 'SELECT' && b.name === 'clienteId')), [a && a.name, b && b.name, !!orc]);
+  });
+  await tenta(['avisos: tocar no texto do aviso só fecha o aviso (o toque não passa para o que está embaixo)', 'teclado: depois de uma ação feita pelo teclado, o cursor vai para o Desfazer'], async () => {
+    const t = toast('Aviso para tocar.'), q = t.getBoundingClientRect(), e = document.elementFromPoint(q.left + 20, q.top + q.height / 2);
+    const dentro = !!e && t.contains(e);
+    e.click();
+    ok('avisos: tocar no texto do aviso só fecha o aviso (o toque não passa para o que está embaixo)', dentro && !t.isConnected && getComputedStyle(t).pointerEvents !== 'none', [dentro, t.isConnected]);
+    ultimoTeclado = Date.now();
+    const t2 = toast('Feito.', '', { rotulo: 'Desfazer', fn: () => {}, grupos: [] });
+    ok('teclado: depois de uma ação feita pelo teclado, o cursor vai para o Desfazer', document.activeElement === t2.querySelector('button'), document.activeElement && document.activeElement.outerHTML.slice(0, 80));
+    t2._sair(); ultimoTeclado = 0;
+  });
+  await tenta(['avisos: ficam o tempo de ler (3,2 s; importantes até 16 s, com ✕; com Desfazer, 8 s)'], async () => {
+    const t1 = toast('Pronto.'), t2 = toast('x'.repeat(300), 'bad'), t3 = toast('Feito.', '', { rotulo: 'Desfazer', fn: () => {}, grupos: [] });
+    ok('avisos: ficam o tempo de ler (3,2 s; importantes até 16 s, com ✕; com Desfazer, 8 s)', t1.style.getPropertyValue('--tempo') === '3200ms' && !t1.querySelector('.x') &&
+      t2.style.getPropertyValue('--tempo') === '16000ms' && !!t2.querySelector('.x') && t3.style.getPropertyValue('--tempo') === '8000ms', 0);
+    [t1, t2, t3].forEach(t => t._sair());
+  });
+  await tenta(['janelas: ao abrir Vender o cursor vai para a quantidade, nunca para a data'], async () => {
+    comNovaVenda();
+    const a = document.activeElement;
+    ok('janelas: ao abrir Vender o cursor vai para a quantidade, nunca para a data', !!a && a.type !== 'date' && a.dataset.col === 'qtd', [a && a.tagName, a && a.type, a && (a.name || a.dataset.col)]);
+  });
+  await carregarTudo();
+
   // 29. persistência
   await new Promise(r => setTimeout(r, 400));
   const foto = () => JSON.stringify([S.filamentos, S.produtos, S.vendas, S.ordens, S.insumos, S.lancamentos, S.contas, S.pessoas].map(l => [...l].sort((a, b) => a.id.localeCompare(b.id))));

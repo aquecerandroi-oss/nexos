@@ -221,6 +221,7 @@ function comNovaVenda(produtoId) {
   const prodIni = byId('produtos', produtoId) ? produtoId : produtos.length === 1 ? produtos[0].id : '';
   const canalIni = S.canais.length ? S.canais[0].id : '', canalObj = byId('canais', canalIni);
   let freteDigitado = false;                                   // frete que a pessoa preencheu à mão não muda sozinho
+  let registrarMesmoIgual = false;                             // a pessoa já respondeu que é outro pedido, igual
   openForm({
     title: 'Novo pedido',
     wide: true,
@@ -307,6 +308,10 @@ function comNovaVenda(produtoId) {
       if (linhas.some(i => !Number.isInteger(i.qtd) || i.qtd < 1)) { toast('A quantidade de cada item precisa ser um número inteiro, a partir de 1.', 'bad'); return false; }
       if (!linhas.some(i => i.precoUnit > 0)) { toast('Informe o preço por unidade dos itens.', 'bad'); return false; }
       if (d.pagamento === 'receber' && !d.vencimento) { toast('Informe quando o cliente vai pagar (vencimento).', 'bad'); return false; }
+      // nada em dobro: pedido igual a um que acabou de entrar (aqui ou no outro aparelho) pergunta antes
+      const igual = registrarMesmoIgual ? null : pedidoIgualRecente({ clienteId: d.clienteId, itens: linhas });
+      registrarMesmoIgual = false;
+      if (igual) { comPerguntarIgual(igual, () => { registrarMesmoIgual = true; FORM.form.requestSubmit(); }); return false; }
       const semPreco = [...new Set(linhas.filter(i => !(i.precoUnit > 0)).map(i => byId('produtos', i.produtoId).nome))];
       if (semPreco.length && !confirmar(`Sem preço: ${semPreco.join(', ')}.\n\n${semPreco.length === 1 ? 'Esse item entra' : 'Esses itens entram'} de graça no pedido. Registrar mesmo assim?`)) return false;
       const faltas = comFaltasEstoque(linhas);
@@ -323,6 +328,19 @@ function comNovaVenda(produtoId) {
     },
   });
   if (FORM && FORM.form) comMostrarVencimento(FORM.form, 'pagamento');
+}
+/* Pedido igual a um que acabou de entrar (mesmos produtos, quantidades e cliente): pergunta com botões grandes antes de
+   registrar outro. O Enter registra (como o OK que a pergunta substitui; na feira, a venda repetida segue com Enter) e "Não
+   registrar" fica embaixo, onde estava o Salvar no celular: o segundo toque de quem tocou duas vezes no Salvar não registra
+   em dobro. Não registrar avisa que nada entrou. */
+function comPerguntarIgual(v, registrar) {
+  const min = Math.round((Date.now() - Date.parse(v.criadoEm || '')) / 60000);
+  const quando = !(min >= 1) ? 'agora há pouco' : 'há ' + comPlural(min, 'minuto', 'minutos');
+  const titulo = comTituloPedido(v).replace(/^Pedido/, 'pedido');
+  perguntar('Pedido igual', `Acabou de entrar o ${esc(titulo)} com os mesmos itens (${esc(resumoItensVenda(v))}, ${brl(v.bruto)})${v.clienteId ? ' para ' + nomeDe('clientes', v.clienteId) : ''}, registrado ${quando}. Registrar mais um?`, [
+    { rotulo: 'Registrar mais um', fn: registrar, foco: true },
+    { rotulo: 'Não registrar', cls: '', fn: () => { if (FORM) FORM.sujo = false; fecharForm(); toast(`Nada foi registrado. Fica só o ${titulo}, que já tinha entrado.`); } },
+  ]);
 }
 
 /* ---------- Detalhes do pedido e devoluções ---------- */
@@ -582,6 +600,7 @@ function comEditarOrcamento(id) {
     title: o ? 'Orçamento nº ' + o.numero : 'Novo orçamento',
     registro: o ? ['orcamentos', o.id] : null,
     wide: true,
+    foco: 'clienteId',          // o cursor começa no Cliente: digitar já escolhe o cliente cadastrado (o nome avulso é só para quem não é)
     fields: [
       { k: 'clienteId', label: 'Cliente', type: 'select', options: [['', '— não cadastrado —'], ...comPorNome(S.clientes).map(c => [c.id, c.nome])] },
       { k: 'clienteNome', label: 'Nome do cliente (se não cadastrado)' },

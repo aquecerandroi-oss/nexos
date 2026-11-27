@@ -641,7 +641,7 @@ VIEWS.compras = function () {
 /* Abre o formulário de compra de filamento (já com o filamento escolhido, se vier o id). Também é chamado por outras telas. */
 function cadNovaCompra(filamentoId) {
   if (!S.filamentos.length) { toast('Cadastre um filamento antes de registrar uma compra.'); ir('filamentos'); return; }
-  const filamentos = cadPorNome(S.filamentos);
+  const filamentos = cadPorNome(S.filamentos), vistos = codigosNaTela('compras');   // as compras na tela ao abrir a janela
   openForm({
     title: 'Registrar compra de filamento',
     saveLabel: 'Registrar compra',
@@ -673,7 +673,11 @@ function cadNovaCompra(filamentoId) {
       if (!byId('filamentos', d.filamentoId)) { toast('Escolha o filamento comprado.', 'bad'); return false; }
       if (!(d.pesoG > 0)) { toast('Informe o peso comprado, em gramas.', 'bad'); return false; }
       if (!(d.valor >= 0)) { toast('O valor pago não pode ser negativo.', 'bad'); return false; }
-      registrarCompra(d);
+      // código fixo (material, dia, peso, valor e um contador que pula só as compras que já estavam na tela ao abrir a janela):
+      // a mesma compra salva nos dois aparelhos entra uma vez só, mesmo quando a do outro chega com esta janela aberta
+      const id = codigoCompra(d, vistos), ja = byId('compras', id), f = byId('filamentos', d.filamentoId);
+      if (ja) { toast(`Outro aparelho já registrou esta compra (${gramas(ja.pesoG)}${f ? ' de ' + f.nome : ''}, ${brl(ja.valor)}) enquanto esta janela estava aberta. Nada foi gravado em dobro: confira em Compras e registre de novo, se for outra.`, 'bad'); return; }
+      registrarCompra({ ...d, id });
       toast('Compra registrada. Estoque e preço médio atualizados.');
     },
   });
@@ -781,6 +785,7 @@ function cadEditarInsumo(id) {
 function cadReporInsumo(id) {
   const i = byId('insumos', id);
   if (!i) return;
+  const vistos = codigosNaTela('lancamentos');                // os lançamentos na tela ao abrir a janela
   openForm({
     title: 'Repor ' + i.nome,
     saveLabel: 'Registrar reposição',
@@ -806,7 +811,11 @@ function cadReporInsumo(id) {
       if (!(d.qtd > 0)) { toast('Informe a quantidade comprada.', 'bad'); return false; }
       const atual = byId('insumos', id);
       if (!atual) { toast('Este insumo não existe mais.', 'bad'); return false; }
-      reporInsumo(atual, d.qtd, d.valor, d.data);
+      // código fixo no lançamento do gasto (o contador pula só os lançamentos que já estavam na tela ao abrir a janela): a mesma
+      // reposição salva nos dois aparelhos entra uma vez só, mesmo quando a do outro chega com esta janela aberta
+      const cod = d.valor > 0 ? codigoReposicao(atual.id, d.qtd, d.valor, d.data, vistos) : '', ja = cod ? byId('lancamentos', cod) : null;
+      if (ja) { toast(`Outro aparelho já registrou esta reposição (${nf(d.qtd, 2)} ${atual.unidade || 'un'} de ${atual.nome}, ${brl(ja.valor)}) enquanto esta janela estava aberta. Nada foi gravado em dobro: confira em Insumos e registre de novo, se for outra.`, 'bad'); return; }
+      reporInsumo(atual, d.qtd, d.valor, d.data, cod);
       toast('Reposição registrada.');
     },
   });

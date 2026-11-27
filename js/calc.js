@@ -438,8 +438,66 @@ function excluirVenda(v) {
   rm('vendas', v.id);
 }
 
+/* ---------- Nada em dobro nos dois aparelhos ----------
+   Sugestão, falha, compra e reposição ganham código fixo (como as cópias de gastos fixos): os dois aparelhos que fazem a mesma
+   coisa quase juntos chegam ao mesmo código, o banco grava o primeiro e recusa o segundo inteiro (com o aviso de que o outro
+   aparelho já registrou e nada entrou em dobro). O contador no fim pula só os códigos que já estavam na tela quando a janela
+   abriu (vistos: os códigos daquele momento): uma segunda compra igual de verdade, feita quando a primeira já apareceu, entra
+   normalmente; e a do outro aparelho que chega com a janela aberta não muda o código desta (quem salva fica sabendo que ela
+   já entrou, em vez de gravar outra). Sem vistos, pula os que estão na tela agora. */
+function codigoLivre(col, raiz, vistos) {
+  raiz = String(raiz).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
+  let n = 0;
+  while (vistos ? vistos.has(raiz + n) : byId(col, raiz + n)) n++;
+  return raiz + n;
+}
+/* Os códigos de uma coleção que estão na tela agora (ao abrir a janela). */
+const codigosNaTela = col => new Set((S[col] || []).map(r => r.id));
+const diaDoCodigo = data => String(EH_DATA.test(String(data || '')) ? data : hoje()).slice(0, 10).replace(/-/g, '');
+/* Compra de filamento: o material, o dia, o peso e o valor (e o contador). */
+const codigoCompra = (d, vistos) => codigoLivre('compras', `cp-${String(d.filamentoId || '').slice(-26)}-${diaDoCodigo(d.data)}-${Math.round(num(d.pesoG) * 100)}-${Math.round(num(d.valor) * 100)}-`, vistos);
+/* Reposição de insumo: o código vai no lançamento do gasto (só existe quando há valor pago). */
+const codigoReposicao = (insumoId, qtd, valor, data, vistos) => codigoLivre('lancamentos', `rp-${String(insumoId || '').slice(-26)}-${diaDoCodigo(data)}-${Math.round(num(qtd) * 1000)}-${Math.round(num(valor) * 100)}-`, vistos);
+/* Ordem criada por uma sugestão de produção: o produto e quantas ordens ele já teve (contadas ao abrir a janela). */
+function codigoSugestao(produtoId) {
+  const raiz = 'sg-' + String(produtoId || '').slice(-50) + '-';
+  let n = S.ordens.filter(o => o.produtoId === produtoId).length;
+  while (byId('ordens', raiz + n)) n++;
+  return raiz + n;
+}
+/* O código que o botão "Criar ordem" levava (o da sugestão como estava na tela, mesmo que a tela tenha ficado parada embaixo
+   do mouse enquanto chegava a ordem do outro aparelho) vale se for deste produto; senão, conta agora. */
+const codigoDaSugestao = (produtoId, cod) => (typeof cod === 'string' && ID_OK.test(cod) && /-\d+$/.test(cod) &&
+  cod.startsWith('sg-' + String(produtoId || '').slice(-50) + '-') ? cod : codigoSugestao(produtoId));
+/* Quantas falhas a ordem já teve: a contagem dela (ordens.falhas) ou as falhas que apontam para ela, o que for maior. */
+const falhasDaOrdem = o => Math.max(0, Math.floor(num(o && o.falhas)), o ? S.falhas.filter(f => f.ordemId === o.id).length : 0);
+/* Falha de uma ordem: a ordem, o filamento perdido e quantas falhas ela já tinha quando a janela abriu (n). Os dois aparelhos
+   que registram a mesma falha chegam ao mesmo código; a perda de outro filamento da mesma ordem é outra falha e entra também.
+   vistos: os códigos de falha que estavam na tela ao abrir a janela (o contador pula esses). */
+function codigoFalha(o, filamentoId, n, vistos) {
+  const raiz = 'fa-' + String(o.id).slice(-24) + '-' + String(filamentoId || '').slice(-24) + '-';
+  n = Math.max(0, Math.floor(num(n)));
+  while (vistos ? vistos.has(raiz + n) : byId('falhas', raiz + n)) n++;
+  return raiz + n;
+}
+/* Ordem ou pedido igual a um que acabou de entrar (mesmo produto, quantidade e cliente, criado há poucos minutos, aqui ou no
+   outro aparelho): a tela pergunta antes de criar outro. Devolve o mais novo deles, ou null. */
+const IGUAL_MINUTOS = 5;
+const criadoHaPouco = r => { const t = Date.parse(r.criadoEm || ''); return isFinite(t) && Math.abs(Date.now() - t) < IGUAL_MINUTOS * 60000; };
+const maisNovo = lista => lista.sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')))[0] || null;
+function ordemIgualRecente(d) {
+  const q = Math.max(1, Math.round(num(d.qtd)));
+  return maisNovo(S.ordens.filter(o => o.produtoId === d.produtoId && num(o.qtd) === q && (o.clienteId || '') === (d.clienteId || '') && criadoHaPouco(o)));
+}
+/* d: { clienteId, itens: [{ produtoId, qtd }] } — os mesmos produtos com as mesmas quantidades, em qualquer ordem. */
+function pedidoIgualRecente(d) {
+  const chave = itens => itens.map(i => i.produtoId + '×' + Math.max(1, Math.round(num(i.qtdOriginal ?? i.qtd)))).sort().join();
+  const meus = chave(d.itens || []);
+  return maisNovo(S.vendas.filter(v => (v.clienteId || '') === (d.clienteId || '') && criadoHaPouco(v) && chave(itensVenda(v)) === meus));
+}
+
 /* ---------- Compras de filamento e insumos ---------- */
-/* d: { data, filamentoId, fornecedorId, pesoG, valor (total pago, com frete), obs }.
+/* d: { data, filamentoId, fornecedorId, pesoG, valor (total pago, com frete), obs, id (código fixo, opcional) }.
    Soma ao estoque e recalcula o preço por kg pela média ponderada com o que já havia. */
 function registrarCompra(d) {
   const f = byId('filamentos', d.filamentoId), g = num(d.pesoG), valor = num(d.valor);
@@ -451,7 +509,8 @@ function registrarCompra(d) {
     put('filamentos', f, { media: { p: 'precoKg', q: 'estoqueG', n: g, v: valor, e: 1000, k: 2 } });
   }
   return put('compras', {
-    id: uid(), data: d.data || hoje(), filamentoId: d.filamentoId || '', fornecedorId: d.fornecedorId || '',
+    // id vindo de fora (código fixo): a mesma compra feita nos dois aparelhos entra uma vez só
+    id: d.id && ID_OK.test(String(d.id)) ? String(d.id) : uid(), data: d.data || hoje(), filamentoId: d.filamentoId || '', fornecedorId: d.fornecedorId || '',
     pesoG: g, valor, precoKg: g > 0 ? valor / (g / 1000) : 0, obs: d.obs || '', criadoEm: agoraISO(),
   });
 }
@@ -461,8 +520,9 @@ function excluirCompra(c) {
   if (f) { f.estoqueG = arred(num(f.estoqueG) - num(c.pesoG), 2); put('filamentos', f); }
   rm('compras', c.id);
 }
-/* Repõe um insumo: soma ao estoque, recalcula o custo médio e lança o gasto no financeiro. */
-function reporInsumo(i, qtd, valor, data) {
+/* Repõe um insumo: soma ao estoque, recalcula o custo médio e lança o gasto no financeiro. id (opcional): código fixo do
+   lançamento (a mesma reposição feita nos dois aparelhos entra uma vez só). */
+function reporInsumo(i, qtd, valor, data, id) {
   qtd = num(qtd); valor = num(valor);
   if (qtd <= 0) return;
   const est = Math.max(0, num(i.estoque));
@@ -470,7 +530,7 @@ function reporInsumo(i, qtd, valor, data) {
   i.estoque = arred(num(i.estoque) + qtd, 3);
   put('insumos', i, valor > 0 ? { media: { p: 'custo', q: 'estoque', n: qtd, v: valor, e: 1, k: 4 } } : {});
   if (valor > 0) {
-    put('lancamentos', { id: uid(), data: data || hoje(), tipo: 'gasto', categoria: 'Insumos', descricao: `Reposição: ${i.nome} (${nf(qtd, 2)} ${i.unidade || 'un'})`, valor, fixo: false, criadoEm: agoraISO() });
+    put('lancamentos', { id: id && ID_OK.test(String(id)) ? String(id) : uid(), data: data || hoje(), tipo: 'gasto', categoria: 'Insumos', descricao: `Reposição: ${i.nome} (${nf(qtd, 2)} ${i.unidade || 'un'})`, valor, fixo: false, criadoEm: agoraISO() });
   }
 }
 /* Comparação de fornecedores a partir das compras. */
@@ -483,13 +543,18 @@ function resumoFornecedores() {
 }
 
 /* ---------- Falhas e manutenção ---------- */
-/* d: { data, produtoId (opcional), filamentoId, gramas, motivo, obs } — baixa o filamento perdido. */
+/* d: { data, produtoId (opcional), filamentoId, gramas, motivo, obs, id e ordemId (opcionais) } — baixa o filamento perdido.
+   Falha de uma ordem: id fixo (codigoFalha) e a ordem que falhou. A contagem da ordem (ordens.falhas) sobe antes, num grupo
+   só dela e sem conferir a versão da ordem (putContagem): se o outro aparelho mexeu na ordem (voltou para a fila, mudou a
+   observação) ou até a excluiu, a falha e a baixa do filamento entram do mesmo jeito. */
 function registrarFalha(d) {
   const f = byId('filamentos', d.filamentoId), g = num(d.gramas);
+  const o = d.ordemId ? byId('ordens', d.ordemId) : null;
+  if (o) { o.falhas = falhasDaOrdem(o) + 1; putContagem('ordens', o); }
   if (f && g > 0) { f.estoqueG = arred(num(f.estoqueG) - g, 2); put('filamentos', f); }
   return put('falhas', {
-    id: uid(), data: d.data || hoje(), produtoId: d.produtoId || '', filamentoId: d.filamentoId || '', gramas: g,
-    motivo: d.motivo || '', obs: d.obs || '', custo: f ? g / 1000 * num(f.precoKg) : 0, criadoEm: agoraISO(),
+    id: d.id && ID_OK.test(String(d.id)) ? String(d.id) : uid(), data: d.data || hoje(), produtoId: d.produtoId || '', filamentoId: d.filamentoId || '', gramas: g,
+    motivo: d.motivo || '', obs: d.obs || '', custo: f ? g / 1000 * num(f.precoKg) : 0, criadoEm: agoraISO(), ...(d.ordemId ? { ordemId: String(d.ordemId) } : {}),
   });
 }
 function excluirFalha(x) {

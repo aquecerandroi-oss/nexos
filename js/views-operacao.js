@@ -49,10 +49,13 @@ function opListaSugestoes(lista, max) {
   const itens = mostrar.map(s => `<li>
       <div style="flex:1;min-width:0"><b>Produzir ${nf(s.falta)}× ${esc(s.p.nome)}</b>
         <div class="muted txt-sm">tem ${nf(s.estoque)}, mínimo ${nf(s.minimo)}, ${nf(s.emProducao)} em produção</div></div>
-      <button type="button" class="btn ghost sm" data-id="${esc(s.p.id)}" data-qtd="${esc(s.falta)}" onclick="opCriarSugerida(this.dataset.id, this.dataset.qtd)">Criar ordem</button></li>`).join('');
+      <button type="button" class="btn ghost sm" data-id="${esc(s.p.id)}" data-qtd="${esc(s.falta)}" data-cod="${esc(codigoSugestao(s.p.id))}" onclick="opCriarSugerida(this.dataset.id, this.dataset.qtd, this.dataset.cod)">Criar ordem</button></li>`).join('');
   return `<ul class="lista">${itens}</ul>${resto > 0 ? `<p class="muted txt-sm mt">E mais ${opPl(resto, 'produto', 'produtos')} abaixo do mínimo.</p>` : ''}`;
 }
-function opCriarSugerida(id, qtd) { opNovaOrdem(id, '', num(qtd)); }
+/* Criar ordem de uma sugestão: a janela de sempre, já com a quantidade, e a ordem ganha código fixo (codigoSugestao): os dois
+   aparelhos que criarem a ordem da mesma sugestão não criam duas. cod: o código como estava na tela quando o botão foi
+   desenhado (se a ordem do outro aparelho chegou com a tela parada embaixo do mouse, a janela pergunta antes de criar outra). */
+function opCriarSugerida(id, qtd, cod) { opFormOrdem(null, id, '', num(qtd), cod || true); }
 
 /* ---------- Tela: Painel ---------- */
 /* Painel dentro de .cols: sem isto a tabela não rola de lado no celular e empurra a tela inteira. */
@@ -179,8 +182,10 @@ const opSeta = (o, dir, pode) => {
 };
 /* destaque: só a próxima ação esperada fica em vermelho (Concluir, ou Iniciar na primeira da fila com a impressora livre). */
 function opLinhaFila(x, naFila, destaque) {
-  const o = x.o, cliente = byId('clientes', o.clienteId);
+  const o = x.o, cliente = byId('clientes', o.clienteId), falhas = falhasDaOrdem(o);
   const sub = [cliente ? esc(cliente.nome) : '', esc(o.obs)].filter(Boolean).join(' · ');
+  /* a ordem já tem falha registrada (aqui ou no outro aparelho): quem vai registrar outra vê antes */
+  const falhou = falhas ? `<div>${selo('Falhou ' + (falhas === 1 ? '1 vez' : nf(falhas) + ' vezes'), 'warn')}</div>` : '';
   const editarExcluir = opBtn('Editar', 'opEditarOrdem', o.id) + opBtn('Excluir', 'opExcluirOrdem', o.id, 'danger');
   let acoes;
   if (o.status === 'imprimindo') {
@@ -194,7 +199,7 @@ function opLinhaFila(x, naFila, destaque) {
     acoes = `<div class="rowbtns">${opBtn('Iniciar', 'opIniciar', o.id, destaque ? '' : 'ghost')}${opSeta(o, -1, i > 0)}${opSeta(o, 1, i >= 0 && i < naFila.length - 1)}${editarExcluir}</div>`;
   }
   return `<tr>
-    <td${opColNome}><b>${opProduto(o.produtoId)}</b>${sub ? `<small>${sub}</small>` : ''}</td>
+    <td${opColNome}><b>${opProduto(o.produtoId)}</b>${sub ? `<small>${sub}</small>` : ''}${falhou}</td>
     <td class="right num">${nf(o.qtd)}</td>
     <td class="right num">${x.p ? horasFmt(x.horas) : '—'}</td>
     <td>${opSituacao(o)}</td>
@@ -248,37 +253,69 @@ VIEWS.producao = function () {
       : vazio('Nenhuma ordem concluída ainda. Quando a impressão terminar, clique em Concluir para as peças entrarem no estoque.')}</div>`;
 };
 
+/* ---------- Desfazer (8 s, no aviso) ----------
+   Cada ação guarda a ordem como estava antes e como ficou; o Desfazer devolve o estoque com as funções de sempre
+   (reabrirOrdem, excluirOrdem...) e põe de volta o que era cada campo mexido pela ação ou por essa volta (desfazer um Concluir
+   mantém a hora de início). Se a ordem já não está como a ação deixou (aqui ou no outro aparelho), nada é desfeito. */
+const opJaMudou = () => { opRender(); toast('Isto já mudou depois. Nada foi desfeito.', 'bad'); };
+/* volta(a): devolve o estoque (reabrirOrdem). antes e depois: cópias da ordem antes e depois da ação. Se, nesse meio-tempo, o
+   outro aparelho iniciou outra ordem ou usou as peças que a ação pôs no estoque, pergunta antes, como o Iniciar e o Reabrir. */
+function opDesfazerOrdem(id, antes, depois, volta, msg) {
+  const a = byId('ordens', id);
+  if (!a || a.status !== depois.status) return opJaMudou();
+  const avisos = [], outra = antes.status === 'imprimindo' && S.ordens.find(x => x.status === 'imprimindo' && x.id !== id);
+  if (outra) avisos.push(`Já existe outra ordem imprimindo (${opOrdemTxt(outra)}). Desfazendo, as duas ficam imprimindo.`);
+  if (depois.status === 'concluido' && antes.status !== 'concluido') { const neg = opAvisoNegativo(a).trim(); if (neg) avisos.push(neg); }
+  if (avisos.length && !confirmar(`${avisos.join('\n\n')}\n\nDesfazer mesmo assim?`)) return;
+  const agora = copia(a);
+  volta(a);
+  const voltou = copia(a);
+  new Set([...Object.keys(antes), ...Object.keys(depois), ...Object.keys(voltou)]).forEach(k => {
+    if (k === 'id' || (iguais(antes[k], depois[k]) && iguais(agora[k], voltou[k]))) return;   // campo que ninguém mexeu fica como está
+    if (k in antes) a[k] = copia(antes[k]); else delete a[k];
+  });
+  put('ordens', a);
+  opRender();
+  toast(msg);
+}
+
 /* Ações da fila */
 function opIniciar(id) {
   const o = byId('ordens', id);
   if (!o || o.status !== 'fila') return render();
   const outra = S.ordens.find(x => x.status === 'imprimindo' && x.id !== o.id);
   if (outra && !confirmar(`Já existe uma ordem imprimindo (${opOrdemTxt(outra)}).\n\nIniciar esta também?`)) return;
+  const antes = copia(o), marca = marcaDesfazer();
   iniciarOrdem(o);
+  const depois = copia(o);
   opRender();
-  toast('Impressão iniciada: ' + opOrdemTxt(o) + '.');
+  avisoDesfazer('Impressão iniciada: ' + opOrdemTxt(o) + '.', marca,
+    () => opDesfazerOrdem(id, antes, depois, a => reabrirOrdem(a, 'fila'), 'Desfeito: a ordem voltou para a fila.'));
 }
 /* Fim da impressão. Produto com acabamento: a ordem vai para "Em acabamento"; os outros: as peças entram no estoque. */
 function opConcluir(id) {
   const o = byId('ordens', id);
   if (!o || !ORDEM_ATIVA(o)) return render();      // já impressa (em outro aparelho, por exemplo): só redesenha
-  const temProduto = !!byId('produtos', o.produtoId);
+  const temProduto = !!byId('produtos', o.produtoId), antes = copia(o), marca = marcaDesfazer();
   concluirOrdem(o);
+  const depois = copia(o), usado = gramas(soma(o.consumo, 'g'));
   opRender();
-  if (!temProduto) return toast('Ordem concluída. O produto foi excluído, por isso o estoque não mudou.');
-  const usado = gramas(soma(o.consumo, 'g'));
-  if (o.status === 'acabamento') return toast(`Impressão terminada: a ordem foi para Em acabamento. Filamento usado: ${usado}.`);
-  toast(`${opPl(o.qtd, 'peça entrou', 'peças entraram')} no estoque de prontas. Filamento usado: ${usado}.`);
+  const msg = !temProduto ? 'Ordem concluída. O produto foi excluído, por isso o estoque não mudou.'
+    : o.status === 'acabamento' ? `Impressão terminada: a ordem foi para Em acabamento. Filamento usado: ${usado}.`
+      : `${opPl(o.qtd, 'peça entrou', 'peças entraram')} no estoque de prontas. Filamento usado: ${usado}.`;
+  avisoDesfazer(msg, marca, () => opDesfazerOrdem(id, antes, depois, a => reabrirOrdem(a, antes.status === 'imprimindo' ? 'imprimindo' : 'fila'),
+    antes.status === 'imprimindo' ? 'Desfeito: a ordem voltou a imprimir, com a mesma hora de início.' : 'Desfeito: a ordem voltou para a fila.'));
 }
 /* Acabamento terminado: as peças entram no estoque de prontas (o material já tinha saído no fim da impressão). */
 function opAcabamentoPronto(id) {
   const o = byId('ordens', id);
   if (!o || o.status !== 'acabamento') return render();
-  const temProduto = !!byId('produtos', o.produtoId);
+  const temProduto = !!byId('produtos', o.produtoId), antes = copia(o), marca = marcaDesfazer();
   concluirOrdem(o);
+  const depois = copia(o);
   opRender();
-  if (!temProduto) return toast('Acabamento pronto. O produto foi excluído, por isso o estoque não mudou.');
-  toast(`Acabamento pronto: ${opPl(o.qtd, 'peça entrou', 'peças entraram')} no estoque de prontas.`);
+  avisoDesfazer(temProduto ? `Acabamento pronto: ${opPl(o.qtd, 'peça entrou', 'peças entraram')} no estoque de prontas.` : 'Acabamento pronto. O produto foi excluído, por isso o estoque não mudou.',
+    marca, () => opDesfazerOrdem(id, antes, depois, a => reabrirOrdem(a, 'acabamento'), 'Desfeito: a ordem voltou para Em acabamento.'));
 }
 /* Peças que estragaram no acabamento (na pintura, na colagem…): o filamento gasto entra em Falhas, as horas de máquina
    continuam contando e a ordem volta para a fila para imprimir de novo. */
@@ -291,12 +328,13 @@ function opRefazer(id) {
   opRender();
   toast(`Registrado: ${gramas(g)} de filamento foram para Falhas e a ordem voltou para a fila.`);
 }
-/* Abre o registro de falha já com o produto e o primeiro filamento dele; a ordem continua como está. */
+/* Abre o registro de falha já com o produto e o primeiro filamento dele; a ordem continua como está (só a contagem de falhas
+   dela sobe, e a falha guarda a ordem: os dois aparelhos registrando a mesma falha dão uma só). */
 function opFalhou(id) {
   const o = byId('ordens', id);
   if (!o) return render();
   const p = byId('produtos', o.produtoId), m = p && (p.materiais || [])[0];
-  opNovaFalha(o.produtoId, m ? m.filamentoId : '');
+  opNovaFalha(o.produtoId, m ? m.filamentoId : '', o.id);
 }
 /* Imprimindo: volta para a fila na hora. Em acabamento: pergunta antes, porque o material volta para o estoque
    e a ordem precisa ser impressa de novo. */
@@ -309,9 +347,12 @@ function opVoltarFila(id) {
     opRender();
     return toast('A ordem voltou para a fila e o material voltou para o estoque.');
   }
+  const antes = copia(o), marca = marcaDesfazer();
   reabrirOrdem(o, 'fila');
+  const depois = copia(o);
   opRender();
-  toast('A ordem voltou para a fila.');
+  avisoDesfazer('A ordem voltou para a fila.', marca,
+    () => opDesfazerOrdem(id, antes, depois, a => reabrirOrdem(a, 'imprimindo'), 'Desfeito: a ordem voltou a imprimir, com a mesma hora de início.'));
 }
 function opMover(id, dir) {
   const o = byId('ordens', id);
@@ -371,8 +412,12 @@ function opEditarOrdem(id) {
   if (!o) { toast('Esta ordem não existe mais.', 'bad'); return render(); }
   opFormOrdem(o);
 }
-function opFormOrdem(o, produtoId, clienteId, qtd) {
+function opFormOrdem(o, produtoId, clienteId, qtd, sugestao) {
   if (!o && !S.produtos.length) { toast('Cadastre um produto primeiro.'); ir('produtos'); return; }
+  /* código da ordem da sugestão: o que o botão levava, ou contado ao abrir a janela (vale só se o produto continuar o da
+     sugestão) */
+  const codSug = !o && sugestao && byId('produtos', produtoId) ? codigoDaSugestao(produtoId, sugestao) : '';
+  let criarMesmoIgual = false;
   const produtos = opPorNome(S.produtos), optsProd = produtos.map(p => [p.id, p.nome]);
   if (o && !byId('produtos', o.produtoId)) optsProd.unshift([o.produtoId || '', 'Produto excluído']);
   /* Ordem nova com mais de um produto e nenhum indicado: a pessoa escolhe, nada vem marcado por engano. */
@@ -409,8 +454,20 @@ function opFormOrdem(o, produtoId, clienteId, qtd) {
       if (!byId('produtos', d.produtoId) && !(atual && d.produtoId === atual.produtoId)) { toast('Escolha o produto.', 'bad'); return false; }
       if (!(d.qtd >= 1) || d.qtd !== Math.round(d.qtd)) { toast('Informe a quantidade em peças inteiras (1 ou mais).', 'bad'); return false; }
       if (!atual) {
-        novaOrdem(d);
-        toast('Ordem criada. Ela entrou no fim da fila.');
+        // nada em dobro: ordem igual que acabou de entrar (ou a desta sugestão, criada no outro aparelho) pergunta antes
+        const daSug = codSug && d.produtoId === produtoId, sugUsada = daSug ? byId('ordens', codSug) : null;
+        const igual = criarMesmoIgual ? null : sugUsada || ordemIgualRecente(d);
+        criarMesmoIgual = false;
+        if (igual) { opPerguntarIgual(igual, () => { criarMesmoIgual = true; FORM.form.requestSubmit(); }); return false; }
+        const marca = marcaDesfazer();
+        const n = novaOrdem({ ...d, id: daSug && !sugUsada ? codSug : '' });
+        avisoDesfazer('Ordem criada. Ela entrou no fim da fila.', marca, () => {
+          const a = byId('ordens', n.id);
+          if (!a || a.status !== 'fila') return opJaMudou();
+          excluirOrdem(a);
+          opRender();
+          toast('Desfeito: a ordem saiu da fila.');
+        });
         return;
       }
       const antes = atual.status;
@@ -424,6 +481,18 @@ function opFormOrdem(o, produtoId, clienteId, qtd) {
       toast(refaz ? 'Ordem atualizada. A baixa de estoque foi refeita.' + (direto ? ' Como este produto não passa por acabamento, as peças entraram no estoque.' : '') : 'Ordem atualizada.');
     },
   });
+}
+/* Ordem igual a uma que acabou de entrar (aqui ou no outro aparelho): pergunta com botões grandes antes de criar outra. O Enter
+   cria (como o OK que a pergunta substitui) e "Não criar" fica embaixo, onde estava o Salvar no celular: o segundo toque de
+   quem tocou duas vezes no Salvar não cria em dobro. Não criar avisa que nada entrou. */
+function opPerguntarIgual(x, criar) {
+  const min = Math.round((Date.now() - Date.parse(x.criadoEm || '')) / 60000);
+  const quando = !(min >= 1) ? 'agora há pouco' : 'há ' + opPl(min, 'minuto', 'minutos');
+  const situacao = { imprimindo: ' (já imprimindo)', acabamento: ' (já em acabamento)', concluido: ' (já concluída)' }[x.status] || '';
+  perguntar('Ordem igual', `Acabou de entrar uma ordem igual: <b>${esc(opOrdemTxt(x))}</b>${x.clienteId ? ' para ' + nomeDe('clientes', x.clienteId) : ''}, criada ${quando}${situacao}. Criar mais uma?`, [
+    { rotulo: 'Criar mais uma', fn: criar, foco: true },
+    { rotulo: 'Não criar', cls: '', fn: () => { if (FORM) FORM.sujo = false; fecharForm(); toast('Nada foi criado. Fica só a ordem que já tinha entrado.'); } },
+  ]);
 }
 /* O que a ordem precisa de cada material, comparado com o estoque. jaBaixado: o que esta mesma ordem
    já tirou do estoque (quando já foi impressa) e que volta se ela for refeita. */
@@ -530,13 +599,26 @@ VIEWS.falhas = function () {
       ? tabela(['Data', 'Produto', 'Filamento', { t: 'Perdido', r: 1 }, { t: 'Custo', r: 1 }, 'Motivo', 'Observação', ''], linhas)
       : vazio('Nenhuma falha registrada. Quando uma impressão der errado, registre aqui para baixar o filamento perdido do estoque.', botao)}</div>`;
 };
-function opNovaFalha(produtoId, filamentoId) {
+/* Quando um registro entrou, em palavras: "agora há pouco", "há 5 minutos", "há 2 horas" ou "em 20/11/2026". */
+function opQuando(r) {
+  const min = Math.round((Date.now() - Date.parse(r.criadoEm || '')) / 60000);
+  if (!isFinite(min) || min >= 1440) return r.data ? 'em ' + dataBR(r.data) : 'há mais de um dia';
+  return min < 1 ? 'agora há pouco' : min < 60 ? 'há ' + opPl(min, 'minuto', 'minutos') : 'há ' + opPl(Math.floor(min / 60), 'hora', 'horas');
+}
+function opNovaFalha(produtoId, filamentoId, ordemId) {
   if (!S.filamentos.length) { toast('Cadastre um filamento primeiro.'); ir('filamentos'); return; }
   const p = byId('produtos', produtoId), fils = opPorNome(S.filamentos);
   const doProduto = p ? (p.materiais || []).find(m => byId('filamentos', m.filamentoId)) : null;
+  // falha de uma ordem: código fixo (a ordem, o filamento e quantas falhas ela já tinha), contado ao abrir a janela
+  const ordem = byId('ordens', ordemId), nFalhas = ordem ? falhasDaOrdem(ordem) : 0, vistos = ordem ? codigosNaTela('falhas') : null;
+  // a ordem já tem falha registrada (aqui ou no outro aparelho): a janela mostra antes de registrar outra
+  const ultima = ordem ? S.falhas.filter(x => x.ordemId === ordem.id).sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')))[0] : null;
+  const jaTem = !nFalhas ? '' : `<p class="aviso txt-sm" style="margin:0">Esta ordem já tem ${opPl(nFalhas, 'falha registrada', 'falhas registradas')}${ultima
+    ? `: a última, ${gramas(ultima.gramas)}${byId('filamentos', ultima.filamentoId) ? ' de ' + esc(byId('filamentos', ultima.filamentoId).nome) : ''}, ${opQuando(ultima)}` : ''}. Registre de novo só se for outra.</p>`;
   openForm({
     title: 'Registrar falha',
     fields: [
+      ...(jaTem ? [{ type: 'html', html: jaTem }] : []),
       { k: 'data', label: 'Data', type: 'date', req: true },
       { k: 'produtoId', label: 'Produto', type: 'select', options: [['', '— não sei / avulsa —']].concat(opPorNome(S.produtos).map(x => [x.id, x.nome])) },
       { k: 'filamentoId', label: 'Filamento perdido', type: 'select', req: true, options: fils.map(f => [f.id, f.nome]) },
@@ -566,7 +648,13 @@ function opNovaFalha(produtoId, filamentoId) {
       if (!(d.gramas > 0)) { toast('Informe quantos gramas de filamento foram perdidos.', 'bad'); return false; }
       const f = byId('filamentos', d.filamentoId);
       if (!f) { toast('Escolha o filamento que foi perdido.', 'bad'); return false; }
-      registrarFalha(d);
+      if (ordem) {
+        // o código desta falha, com o filamento escolhido. Se ele entrou com a janela aberta (o outro aparelho registrou a
+        // mesma falha), não registra em dobro
+        const id = codigoFalha(ordem, d.filamentoId, nFalhas, vistos), ja = byId('falhas', id);
+        if (ja) { toast(`Outro aparelho já registrou esta falha (${gramas(ja.gramas)} de ${f.nome}) enquanto esta janela estava aberta. Nada foi gravado em dobro: confira em Falhas e registre de novo, se for outra.`, 'bad'); return; }
+        registrarFalha({ ...d, id, ordemId: ordem.id });
+      } else registrarFalha(d);
       toast(`Falha registrada: baixa de ${gramas(d.gramas)} em ${f.nome}.`);
     },
   });

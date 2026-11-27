@@ -57,10 +57,11 @@ b,strong{font-weight:600}
 /* ---------- Estrutura ---------- */
 #app{display:flex;min-height:100vh}
 .topbar{display:none}
-.side{width:244px;flex:none;background:linear-gradient(180deg,#070708,#000 45%);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 12px 10px;position:sticky;top:0;height:100vh;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:var(--line2) transparent;isolation:isolate}
+.side{width:244px;flex:none;background:linear-gradient(180deg,#070708,#000 45%);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 10px 0;position:sticky;top:0;height:100vh;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:var(--line2) transparent;isolation:isolate}
 .side::before{content:"";position:absolute;left:0;right:0;top:0;height:240px;z-index:-1;pointer-events:none;background:radial-gradient(240px 170px at 26% 0%,rgba(227,24,45,.24),transparent 70%)}
 .side::after{content:"";position:absolute;top:0;right:0;width:1px;height:70%;pointer-events:none;background:linear-gradient(180deg,transparent,rgba(255,59,78,.75) 22%,transparent 70%)}
 .brand{display:flex;align-items:center;gap:10px;text-decoration:none;padding:4px 6px 16px;position:relative;outline-offset:4px}
+.brand-side{padding-bottom:10px}
 .brand-propria{width:38px;height:38px;object-fit:contain;border-radius:8px;flex:none}
 /* Símbolo da logo vivo: respira em vermelho, recebe um brilho de tempos em tempos e gira ao clicar */
 .marca-viva{position:relative;display:block;width:44px;height:44px;flex:none;perspective:420px}
@@ -81,9 +82,10 @@ b,strong{font-weight:600}
 @keyframes respira{0%,100%{filter:drop-shadow(0 0 5px rgba(255,40,60,.28))}50%{filter:drop-shadow(0 0 13px rgba(255,59,78,.7))}}
 @keyframes brilho{0%,64%{background-position:-160% 0}84%,100%{background-position:160% 0}}
 @keyframes gira3d{from{transform:rotateY(0) scale(1)}55%{transform:rotateY(200deg) scale(1.12)}to{transform:rotateY(360deg) scale(1)}}
-nav{display:flex;flex-direction:column;gap:2px;margin-bottom:10px;position:relative;z-index:1}
-.nav-g{color:#7c7c89;font:650 10px/1 var(--titulo);letter-spacing:.22em;text-transform:uppercase;padding:14px 12px 6px}
-nav a{position:relative;display:flex;align-items:center;gap:10px;color:var(--text2);text-decoration:none;padding:7px 12px;border-radius:9px;font-weight:500;transition:color .2s}
+/* Menu: as 16 telas e o selo de gravação cabem em 820 px de altura; em tela mais baixa o selo fica preso embaixo */
+nav{display:flex;flex-direction:column;gap:2px;margin-bottom:6px;position:relative;z-index:1}
+.nav-g{color:#7c7c89;font:650 10px/1 var(--titulo);letter-spacing:.22em;text-transform:uppercase;padding:10px 12px 4px}
+nav a{position:relative;display:flex;align-items:center;gap:10px;color:var(--text2);text-decoration:none;padding:4.5px 8px 4.5px 11px;border-radius:9px;font-weight:500;transition:color .2s}
 nav a::before{content:"";position:absolute;inset:0;border-radius:inherit;z-index:-1;background:linear-gradient(90deg,rgba(255,255,255,.065),rgba(255,255,255,.012));opacity:0;transform:scaleX(.55);transform-origin:left;transition:opacity .2s,transform .3s var(--suave)}
 nav a:hover{color:#fff}
 nav a:hover::before{opacity:1;transform:none}
@@ -92,7 +94,7 @@ nav:not(.com-ind) a.on{background:linear-gradient(90deg,var(--red-suave),transpa
 .ic{width:18px;height:18px;flex:none;opacity:.9;transition:transform .3s var(--mola),color .2s,filter .2s}
 nav a:hover .ic{transform:translateX(2px) scale(1.1);color:var(--red3)}
 nav a.on .ic{color:var(--red2);filter:drop-shadow(0 0 6px rgba(255,59,78,.65))}
-nav a span{flex:1}
+nav a span{flex:1;white-space:nowrap;letter-spacing:-.006em}
 /* Indicador que desliza até a tela aberta (posição calculada pelo visual.js) */
 .nav-ind{position:absolute;left:12px;top:0;width:calc(100% - 24px);height:34px;border-radius:9px;pointer-events:none;z-index:0;opacity:0;overflow:hidden;
   background:linear-gradient(90deg,rgba(227,24,45,.3),rgba(227,24,45,.07) 70%,transparent);box-shadow:inset 3px 0 0 var(--red2),0 0 22px rgba(227,24,45,.16);
@@ -101,7 +103,7 @@ nav a span{flex:1}
 @keyframes brilho-nav{0%,70%{background-position:-120% 0}100%{background-position:220% 0}}
 .pill{font-style:normal;background:var(--metal-red);color:#fff;font-size:11px;font-weight:700;border-radius:999px;min-width:18px;height:18px;padding:0 5px;display:inline-flex;align-items:center;justify-content:center;animation:alerta 2.2s ease-out infinite}
 @keyframes alerta{0%{box-shadow:0 0 0 0 rgba(255,59,78,.55)}70%,100%{box-shadow:0 0 0 7px rgba(255,59,78,0)}}
-.side-foot{margin-top:auto;padding:10px 8px 2px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);position:relative;z-index:1}
+.side-foot{margin-top:auto;padding:9px 8px 10px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);position:sticky;bottom:0;z-index:2;background:#000;box-shadow:0 -12px 14px #000}
 .sync{display:flex;align-items:center;gap:8px;cursor:default}
 .sync i{position:relative;width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none;box-shadow:0 0 8px rgba(53,194,107,.6)}
 .sync i::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1px solid rgba(53,194,107,.5);animation:anel 2.6s ease-out infinite}
@@ -227,6 +229,8 @@ input[type=checkbox]{width:16px;height:16px;accent-color:var(--red);flex:none}
 .hint.aviso{color:var(--warn)} .hint.neg{color:var(--bad)}
 .com-col-nome{min-width:150px}
 .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;flex-wrap:wrap}
+/* Salvar sempre à vista: o rodapé da janela fica preso embaixo enquanto o resto rola */
+form.caixa > .actions{position:sticky;bottom:-40px;margin:16px -22px -22px;padding:14px 22px 18px;background:linear-gradient(180deg,rgba(16,16,20,0),var(--panel) 30%);border-radius:0 0 16px 16px;z-index:3}
 .check{display:flex;align-items:center;gap:8px;color:var(--text);font-size:14px;margin:0;cursor:pointer}
 .form-sec{font:650 11px/1.2 var(--titulo);text-transform:uppercase;letter-spacing:.16em;color:var(--red3);border-bottom:1px solid var(--line);padding:10px 0 7px;margin-top:4px;position:relative}
 .form-sec::after{content:"";position:absolute;left:0;bottom:-1px;width:44px;height:1px;background:var(--red2);box-shadow:0 0 8px rgba(255,59,78,.8)}
@@ -256,7 +260,8 @@ select.status{width:auto;padding:5px 8px;font-size:12px}
 .shp-guia li{margin:4px 0}
 
 /* ---------- Janela ---------- */
-.modal{position:fixed;inset:0;background:rgba(3,3,5,.72);-webkit-backdrop-filter:blur(8px) saturate(115%);backdrop-filter:blur(8px) saturate(115%);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:30}
+.modal{position:fixed;inset:0;background:rgba(3,3,5,.72);-webkit-backdrop-filter:blur(8px) saturate(115%);backdrop-filter:blur(8px) saturate(115%);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:30;
+  scroll-padding-bottom:104px}   /* andando com Tab, o campo com o cursor para acima do rodapé preso (Cancelar e Salvar), nunca embaixo dele */
 .modal.open{display:flex;animation:surge-fundo .25s ease-out}
 body.modal-aberto{overflow:hidden}
 .caixa{position:relative;background:linear-gradient(180deg,rgba(255,255,255,.04),transparent 140px),var(--panel);border:1px solid var(--line2);border-radius:16px;padding:22px;width:100%;max-width:640px;box-shadow:0 30px 80px rgba(0,0,0,.7),0 0 0 1px rgba(255,59,78,.05);animation:abre .38s var(--mola)}
@@ -275,12 +280,25 @@ body.modal-aberto{overflow:hidden}
 .calc .tot b{font-weight:700;font-family:var(--titulo);font-size:15px}
 .calc h4{margin:0 0 6px;font:650 11px/1.2 var(--titulo);text-transform:uppercase;letter-spacing:.14em;color:var(--muted)}
 .calc table td,.calc table th{padding:6px 8px}
-#toasts{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:50;max-width:min(390px,calc(100vw - 40px))}
-.toast{--tempo:3.2s;position:relative;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,.045),transparent),#141419;border:1px solid var(--line2);border-left:3px solid var(--red2);padding:12px 16px 14px;border-radius:10px;box-shadow:var(--sombra);animation:toast-entra .45s var(--mola)}
+/* Avisos: no computador, no canto de baixo à esquerda da área de trabalho, ao lado do menu (nunca em cima dele, e longe dos
+   botões das linhas, que ficam à direita); no celular, no alto, ao lado do botão do menu. Tocar no aviso só fecha o aviso: o
+   toque nunca passa para o botão escondido embaixo dele. */
+#toasts{position:fixed;left:264px;bottom:20px;display:flex;flex-direction:column;gap:8px;z-index:60;max-width:min(390px,calc(100vw - 284px));pointer-events:none}
+.toast{--tempo:3.2s;position:relative;overflow:hidden;display:flex;align-items:center;gap:14px;background:linear-gradient(180deg,rgba(255,255,255,.045),transparent),#141419;border:1px solid var(--line2);border-left:3px solid var(--red2);padding:12px 16px 14px;border-radius:10px;box-shadow:0 20px 50px rgba(0,0,0,.75),0 0 0 1px rgba(255,255,255,.05);animation:toast-entra .45s var(--mola);pointer-events:auto}
+.toast > span{flex:1;min-width:0}
+.toast .btn,.toast .x{flex:none}
+.toast .btn{padding:8px 14px;font-size:13px}
+.toast .x{margin:-4px -6px -4px 0}
 .toast::after{content:"";position:absolute;left:0;bottom:0;width:100%;height:2px;background:var(--red2);opacity:.6;transform-origin:left;animation:toast-tempo var(--tempo) linear forwards}
+.toast.com-acao{border-left-color:var(--ok)} .toast.com-acao::after{background:var(--ok)}
 .toast.bad{--tempo:6s;border-left-color:var(--bad);color:#ffd9dc} .toast.bad::after{background:var(--bad)}
 .toast.warn{--tempo:6s;border-left-color:var(--warn)} .toast.warn::after{background:var(--warn)}
-@keyframes toast-entra{from{opacity:0;transform:translateX(32px) scale(.96)}}
+@keyframes toast-entra{from{opacity:0;transform:translateX(-32px) scale(.96)}}
+/* Pergunta curta com botões grandes (no lugar do OK/Cancelar do navegador) */
+.caixa.pergunta{max-width:470px}
+.pergunta-txt{color:var(--text2);font-size:15px;line-height:1.5}
+.pergunta-botoes{display:grid;gap:10px;margin-top:18px}
+.pergunta-botoes .btn{min-height:50px;font-size:15px;white-space:normal;text-align:center}
 @keyframes toast-tempo{to{transform:scaleX(0)}}
 .versao-nova{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:29;display:flex;align-items:center;gap:12px;padding:10px 10px 10px 16px;border-radius:12px;background:#15151a;border:1px solid rgba(255,59,78,.45);box-shadow:0 18px 50px rgba(0,0,0,.6),0 0 26px rgba(227,24,45,.25);width:max-content;max-width:calc(100vw - 24px);animation:sobe-banner .5s var(--mola)}
 body.modal-aberto .versao-nova{display:none}
@@ -462,7 +480,53 @@ body.modal-aberto .versao-nova{display:none}
   .auth-painel{align-items:flex-start;padding:4px 16px 36px}
   .auth-card{padding:24px 20px 22px}
   body::after{opacity:.35}
+  /* botões que o dedo acerta: 44 px ou mais */
+  .menu-btn{width:44px;height:44px}
+  .side nav a{min-height:44px;padding-top:9px;padding-bottom:9px}
+  .x{min-width:44px;min-height:44px}
+  .btn{min-height:44px;min-width:44px}
+  .btn.sm{font-size:13.5px;padding:8px 13px;border-radius:10px}
+  .head-acoes .btn{min-height:46px}
+  .row .btn{height:auto}
+  .link,.tabs button,.tabs a{min-height:44px}
+  .link{display:inline-flex;align-items:center}
+  select.status{min-height:44px}
+  #modal input:not([type=checkbox]):not([type=color]):not([type=hidden]),#modal select{min-height:46px}
+  /* a tabela rola de lado e o nome da linha fica preso à esquerda (a coluna do nome, não a da data: ver tabela() no base.js) */
+  #main .panel .preso-1 tr:not(.total) > :nth-child(1),#main .panel .preso-2 tr:not(.total) > :nth-child(2),
+  #main .panel .preso-3 tr:not(.total) > :nth-child(3),#main .panel .preso-4 tr:not(.total) > :nth-child(4){
+    position:sticky;left:-4px;z-index:1;background:#121216;min-width:min(112px,30vw)!important;max-width:34vw;box-shadow:8px 0 10px -8px rgba(0,0,0,.9)}
+  /* os botões da linha ficam numa linha só, como antes (a linha não dobra de altura); um pouco mais justos, com 44 px de altura */
+  #main td .rowbtns{flex-wrap:nowrap;gap:5px}
+  #main td .rowbtns .btn.sm{padding-left:10px;padding-right:10px}
+  /* outros alvos de toque com 44 px: marcar com rótulo, listas de escolha, o selo de gravação e os avisos do Painel */
+  .check{min-height:44px}
+  #main select{min-height:44px}
+  .topbar .sync{min-width:44px;min-height:44px;justify-content:center}
+  #main .lista li > a{min-height:44px;display:flex;align-items:center}
+  #main p a:not(.btn),#main .lista li div > a:not(.btn){padding:14px 0}   /* link no meio do texto: o toque pega 44 px sem mudar o texto */
+  /* a janela sobe do rodapé, com Salvar sempre à vista perto do polegar */
+  .modal{padding:34px 0 0;align-items:flex-start}
+  .caixa{margin-top:auto;border-radius:18px 18px 0 0;max-width:none;border-left:0;border-right:0;border-bottom:0;animation:sobe-rodape .32s var(--suave)}
+  .caixa:not(form){padding-bottom:calc(18px + env(safe-area-inset-bottom))}
+  .modal-head{margin-bottom:12px}
+  form.caixa > .actions{bottom:0;margin:16px -16px -16px;padding:11px 16px calc(13px + env(safe-area-inset-bottom));background:#101014;border-top:1px solid var(--line);border-radius:0;flex-wrap:nowrap}
+  form.caixa > .actions .btn{min-height:52px}
+  form.caixa > .actions .btn[type=submit]{flex:1;font-size:16px}
+  /* avisos no alto, ao lado do botão do menu (que fica livre): não cobrem o Salvar nem os botões de baixo */
+  #toasts{top:calc(6px + env(safe-area-inset-top));bottom:auto;left:62px;right:8px;max-width:none}
+  .toast{animation-name:toast-desce;padding:8px 8px 10px 12px;gap:10px;font-size:14px;line-height:1.35}
+  .toast .btn{min-height:46px;padding:8px 12px;font-size:14px}
+  /* menu do celular: as 16 telas cabem em 390×844 com itens de 44 px (o selo de gravação já fica na barra do alto) */
+  .side{padding-top:10px}
+  .brand-side{padding:0 6px 4px}
+  .brand-side .marca-viva{width:36px;height:36px}
+  .side-foot{position:static;box-shadow:none}
+  .side nav{gap:0}
+  .side .nav-g{padding:6px 12px 2px}
 }
+@keyframes sobe-rodape{from{opacity:0;transform:translateY(40px)}}
+@keyframes toast-desce{from{opacity:0;transform:translateY(-20px) scale(.96)}}
 @media (max-width:520px){ .btn{white-space:normal;text-align:center} .btn.sm{white-space:nowrap} }
 @media (max-width:420px){ .cards{grid-template-columns:1fr} }
 @media (prefers-reduced-motion:reduce){ *,*::before,*::after{animation:none!important;transition:none!important} .luz-mouse{display:none} }
