@@ -530,9 +530,9 @@ function gesPainelPessoas() {
   const geral = brl(S.config.maoObraHora);
   const pessoas = [...S.pessoas].sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR'));
   const linhas = pessoas.map(p => {
-    const n = gesProdutosDaPessoa(p.id).length;
+    const n = gesProdutosDaPessoa(p.id).length, eu = !DEMO && !!EU.id && p.acesso === EU.id;
     return `<tr>
-      <td style="min-width:150px"><b>${esc(p.nome)}</b>${n ? `<small>em ${gesPlural(n, 'produto', 'produtos')}</small>` : ''}</td>
+      <td style="min-width:150px"><b>${esc(p.nome)}</b>${eu ? ' <span class="muted">(você)</span>' : ''}${n ? `<small>em ${gesPlural(n, 'produto', 'produtos')}</small>` : ''}</td>
       <td class="right num">${num(p.valorHora) > 0 ? brl(p.valorHora) : `<span class="muted">valor geral (${geral})</span>`}</td>
       <td><div class="rowbtns">${gesBotao('Editar', 'gesEditarPessoa', p.id)}${gesBotao('Excluir', 'gesExcluirPessoa', p.id, 'danger')}</div></td></tr>`;
   }).join('');
@@ -545,18 +545,21 @@ function gesPainelPessoas() {
       <p class="hint" style="margin-top:12px">No cadastro do produto, cada etapa da mão de obra pode ter a sua pessoa e os seus minutos.</p>
     </div>`;
 }
-/* Formulário de pessoa (sem id = nova). */
+/* Formulário de pessoa (sem id = nova). "É o meu acesso" liga a pessoa ao login de quem está usando o aparelho: o nome dela
+   aparece no lugar do e-mail onde o sistema diz quem fez (ex.: "pedido por Ana", em O que comprar). Uma pessoa por acesso. */
 function gesEditarPessoa(id) {
   const p = id ? byId('pessoas', id) : null;
   if (id && !p) return toast('Essa pessoa não existe mais.', 'bad');
+  const comAcesso = !DEMO && !!EU.id;
   openForm({
     title: p ? 'Editar pessoa' : 'Nova pessoa',
     registro: p ? ['pessoas', p.id] : null,
     fields: [
       { k: 'nome', label: 'Nome', req: true, full: true, ph: 'Ex.: Ana (acabamento)' },
       { k: 'valorHora', label: 'Valor da hora (R$)', type: 'number', hint: `Deixe 0 para usar o valor geral de ${brl(S.config.maoObraHora)} por hora.` },
+      ...(comAcesso ? [{ k: 'meuAcesso', label: 'É o meu acesso (esta pessoa sou eu)', type: 'check', full: true, hint: `O nome aparece no lugar de ${String(EU.email || '').split('@')[0]} onde o sistema diz quem fez, como “pedido por”.` }] : []),
     ],
-    vals: p ? { ...p, valorHora: num(p.valorHora) > 0 ? p.valorHora : '' } : { nome: '', valorHora: '' },
+    vals: p ? { ...p, valorHora: num(p.valorHora) > 0 ? p.valorHora : '', meuAcesso: comAcesso && p.acesso === EU.id } : { nome: '', valorHora: '', meuAcesso: false },
     preview(d) {
       const propria = num(d.valorHora) > 0, vh = propria ? num(d.valorHora) : num(S.config.maoObraHora);
       return `<p class="hint">Exemplo: 30 minutos de trabalho custam ${brl(vh / 2)}${propria ? '' : ' (valor geral)'}.</p>`;
@@ -567,7 +570,10 @@ function gesEditarPessoa(id) {
       if (S.pessoas.some(x => x.id !== (p ? p.id : '') && String(x.nome || '').trim().toLowerCase() === nome)) {
         toast('Já existe uma pessoa com esse nome.', 'bad'); return false;
       }
-      put('pessoas', { ...((p && byId('pessoas', p.id)) || p || {}), nome: d.nome, valorHora: arred(d.valorHora, 2), id: p ? p.id : uid() });
+      const rec = { ...((p && byId('pessoas', p.id)) || p || {}), nome: d.nome, valorHora: arred(d.valorHora, 2), id: p ? p.id : uid() };
+      if (comAcesso) { if (d.meuAcesso) rec.acesso = EU.id; else if (rec.acesso === EU.id) delete rec.acesso; }
+      put('pessoas', rec);
+      if (comAcesso && d.meuAcesso) S.pessoas.filter(x => x.id !== rec.id && x.acesso === EU.id).forEach(x => { const y = { ...x }; delete y.acesso; put('pessoas', y); });
       toast(p ? 'Pessoa atualizada.' : 'Pessoa cadastrada.');
     },
   });

@@ -1176,31 +1176,35 @@
   criarConta({ id: 'p2-ct4', tipo: 'pagar', descricao: 'Conta da semana', valor: 30, vencimento: addDias(hoje(), 3) });
   put('orcamentos', { id: 'p2-orc', numero: 7, data: hoje(), validade: addDias(hoje(), 7), clienteId: 'p2-c1', clienteNome: '', itens: [{ produtoId: 'p2-a', descricao: 'Peça A', qtd: 2, precoUnit: 30 }], desconto: 0, sinalPct: 0, status: 'aprovado', ordensGeradas: false });
   await pausa(300);
-  await tenta(['Painel: os avisos de hoje continuam todos, cada um na sua lista (Precisa de atenção, Contas e Material acabando)',
-    'Painel: cada linha tem o botão que resolve (Feito, Na frente, Pronto, Criar ordem com o código fixo, Produzir, Pagar e Receber)',
+  // desde a versão 19 (etapa 3), os avisos de filamento e insumo ficam em O que comprar (#op-material, no lugar de Material
+  // acabando), com Comprei e Repor no lugar do Abrir: as verificações abaixo conferem o mesmo, na lista nova
+  await tenta(['Painel: os avisos de hoje continuam todos, cada um na sua lista (Precisa de atenção, Contas e O que comprar)',
+    'Painel: cada linha tem o botão que resolve (Feito, Na frente, Pronto, Criar ordem com o código fixo, Produzir, Pagar, Receber, Comprei e Repor)',
     'Painel: no celular, três ícones no alto pulam até as listas'], async () => {
-    ['atencao', 'contas', 'material'].forEach(k => { opListaAberta[k] = true; });          // "Ver mais" aberto nas três listas
-    const av = alertas(), at = opItensAtencao(), ct = opItensContas(), mt = opItensMaterial(), p = VIEWS.painel();
-    ['atencao', 'contas', 'material'].forEach(k => { opListaAberta[k] = false; });
+    ['atencao', 'contas', 'comprar'].forEach(k => { opListaAberta[k] = true; });          // "Ver mais" aberto nas três listas
+    const av = alertas(), at = opItensAtencao(), ct = opItensContas(), mt = materiaisParaComprar().comprar, p = VIEWS.painel();
+    ['atencao', 'contas', 'comprar'].forEach(k => { opListaAberta[k] = false; });
     const kinds = [...new Set(av.map(a => a.k + ':' + a.tipo))].sort();
     const nome = a => (a.k === 'filamento' ? byId('filamentos', a.id) : a.k === 'insumo' ? byId('insumos', a.id) : byId('produtos', a.id) || {}).nome;
     const naLista = a => (['conta-vencida', 'conta-hoje', 'receber'].includes(a.k) ? ct.some(x => x.b.id === a.id)
-      : ['filamento', 'insumo'].includes(a.k) ? mt.some(x => x.link === a.pg && x.titulo.endsWith(esc(nome(a))))
+      : ['filamento', 'insumo'].includes(a.k) ? mt.some(m => m.id === a.id && m.t === (a.k === 'filamento' ? 'fil' : 'ins')) && p.includes(`data-id="${a.id}"`)
         : ['atrasada', 'hoje', 'estoura'].includes(a.k) ? at.some(x => x.k === a.k && x.titulo === esc(opOrdemTxt(byId('ordens', a.id))))
           : ['manut-vencida', 'manut-proxima', 'minimo'].includes(a.k) ? at.some(x => x.k === a.k && x.b && x.b.id === a.id)
             : a.k === 'negativo' ? at.some(x => x.k === a.k && x.titulo === esc(nome(a))) : a.k === 'aliquota' && at.some(x => x.k === 'aliquota'));
-    ok('Painel: os avisos de hoje continuam todos, cada um na sua lista (Precisa de atenção, Contas e Material acabando)', av.length === 16 && kinds.length === 15 && av.every(naLista) &&
+    ok('Painel: os avisos de hoje continuam todos, cada um na sua lista (Precisa de atenção, Contas e O que comprar)', av.length === 16 && kinds.length === 15 && av.every(naLista) &&
       at.length === 10 && ct.length === 4 && mt.length === 4 && /id="op-atencao"/.test(p) && /id="op-contas"/.test(p) && /id="op-material"/.test(p), { av: av.map(a => a.k + ':' + a.tipo), kinds, faltam: av.filter(a => !naLista(a)).map(a => a.texto), at: at.length, ct: ct.length, mt: mt.length });
     const tem = (fn, id, rot) => new RegExp(`data-id="${id}"[^>]*onclick="${fn}\\(this\\.dataset\\.id[^"]*\\)">${rot}<`).test(p);
     const botoes = { feito: tem('opFeito', 'p2-m1', 'Feito') && tem('opFeito', 'p2-m2', 'Feito'), frente: tem('opFrente', 'p2-o1', 'Na frente') && tem('opFrente', 'p2-o2', 'Na frente') && tem('opFrente', 'p2-o3', 'Na frente'),
       primeira: !/data-id="p2-o0"[^>]*onclick="opFrente/.test(p), pronto: tem('opAcabamentoPronto', 'p2-o4', 'Pronto'), produzir: tem('comProduzirOrcamento', 'p2-orc', 'Produzir'),
       criar: new RegExp(`data-id="p2-a" data-qtd="3" data-cod="${codigoSugestao('p2-a')}" onclick="opCriarDaSugestao\\(this\\.dataset\\.id, this\\.dataset\\.qtd, this\\.dataset\\.cod\\)">Criar ordem<`).test(p),
       pagar: tem('ctaPagar', 'p2-ct1', 'Pagar') && tem('ctaPagar', 'p2-ct2', 'Pagar') && tem('ctaPagar', 'p2-ct4', 'Pagar'), receber: tem('ctaPagar', 'p2-ct3', 'Receber'),
-      abrir: /href="#vendas">Abrir</.test(p) && /href="#config">Abrir</.test(p) && /href="#filamentos">Abrir</.test(p) && /href="#insumos">Abrir</.test(p) };
-    ok('Painel: cada linha tem o botão que resolve (Feito, Na frente, Pronto, Criar ordem com o código fixo, Produzir, Pagar e Receber)', Object.values(botoes).every(Boolean), botoes);
+      abrir: /href="#vendas">Abrir</.test(p) && /href="#config">Abrir</.test(p),
+      comprei: ['p2-f1', 'p2-f2'].every(id => new RegExp(`data-t="fil" data-id="${id}" onclick="cadComprei\\(this\\.dataset\\.t, this\\.dataset\\.id\\)">Comprei<`).test(p)),
+      repor: ['p2-i1', 'p2-i2'].every(id => new RegExp(`data-t="ins" data-id="${id}" onclick="cadComprei\\(this\\.dataset\\.t, this\\.dataset\\.id\\)">Repor<`).test(p)) };
+    ok('Painel: cada linha tem o botão que resolve (Feito, Na frente, Pronto, Criar ordem com o código fixo, Produzir, Pagar, Receber, Comprei e Repor)', Object.values(botoes).every(Boolean), botoes);
     const saltos = (/class="op-saltos"[\s\S]*?<\/div>/.exec(p) || [''])[0];
     ok('Painel: no celular, três ícones no alto pulam até as listas', (saltos.match(/class="op-salto"/g) || []).length === 3 && /aria-label="Precisa de atenção: 10"/.test(saltos) && /aria-label="Contas: 4"/.test(saltos) &&
-      /aria-label="Material acabando: 4"/.test(saltos) && /opIrBloco\('op-atencao'\)/.test(saltos) && /opIrBloco\('op-contas'\)/.test(saltos) && /opIrBloco\('op-material'\)/.test(saltos), saltos.slice(0, 400));
+      /aria-label="O que comprar: 4"/.test(saltos) && /opIrBloco\('op-atencao'\)/.test(saltos) && /opIrBloco\('op-contas'\)/.test(saltos) && /opIrBloco\('op-material'\)/.test(saltos), saltos.slice(0, 400));
   });
   await tenta(['Painel: Feito, Pagar e Receber abrem as janelas de sempre', 'Painel: Produzir faz a pergunta de sempre e cria as ordens do orçamento',
     'Painel: Criar ordem cria a ordem da sugestão em um clique, com o código fixo, e tem Desfazer', 'Painel: a mesma sugestão criada no outro aparelho ao mesmo tempo entra uma vez só',
@@ -1466,6 +1470,732 @@
     await pausa(100);
     ok('pedido igual: "Não registrar" fecha a janela e avisa que nada entrou', !!p && !$('#modal.open') && vendasDe(cid) === 1 && avisos32().some(t => /^Nada foi registrado\./.test(t)), [vendasDe(cid), avisos32()]);
   });
+  window.confirm = confirmarDeVerdade;
+  await carregarTudo();
+
+  // 34. versão 19, etapa 3: compras e estoque. O que comprar contando a fila inteira (Painel e Compras), Comprei já preenchido com a
+  // última compra (Repor com a última reposição), valor fora do comum, Já pedi, A caminho e Chegou, e Acertar estoque numa janela de
+  // 1 campo. Banco limpo; o "outro PC" grava direto no banco local, como nas seções 31 a 33.
+  for (let i = 0; i < 40 && temPendencias(); i++) await pausa(100);
+  localStorage.removeItem(DEMO_KEY); localStorage.removeItem('nexos-carretel'); await carregarTudo(); ir('painel'); render();
+  limparAvisos();
+  window.confirm = () => true;
+  const dom34 = h => { const d = document.createElement('div'); d.innerHTML = h; return d; };
+  const txt34 = el => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+  const secao34 = (h, id) => $('#' + id, dom34(h));
+  const linhas34 = (h, id) => { const s = secao34(h, id); return s ? $$('li', s) : []; };
+  // uma linha da lista O que comprar: "nome | o que diz | botões"
+  const linha34 = li => [txt34($('.op-t b', li)), txt34($('.op-t small', li)), $$('.cad-bts button', li).map(txt34).join(' ')].join(' | ');
+  const dica34 = el => txt34(el && el.parentElement && $('.hint', el.parentElement));
+  const tiraAvisos34 = () => $$('#toasts .toast:not(.com-acao)').forEach(t => (t._sair ? t._sair() : t.remove()));
+  const assenta34 = async () => { for (let i = 0; i < 80 && temPendencias(); i++) await pausa(50); };   // o que a cena de antes gravou já entrou
+  put('fornecedores', { id: 'e3-fo1', nome: 'Voolt E3', contato: '', obs: '' });
+  put('fornecedores', { id: 'e3-fo2', nome: 'Lab E3', contato: '', obs: '' });
+  const fil34 = (id, nome, cor, precoKg, estoqueG) => put('filamentos', { id, nome, tipo: 'PLA', cor, precoKg, estoqueG });
+  fil34('e3-preto', 'PLA Preto E3', '#111111', 104, 165); fil34('e3-branco', 'PLA Branco E3', '#eeeeee', 98, 2000); fil34('e3-dour', 'PLA Dourado E3', '#c9a227', 139, 118);
+  fil34('e3-verde', 'PLA Verde E3', '#157a3a', 101, 410); fil34('e3-transl', 'PETG Translúcido E3', '#cfe6ee', 118, 0); fil34('e3-cinza', 'PLA Cinza E3', '#8d8f94', 97, 930);
+  const ins34 = (id, nome, custo, estoque, minimo) => put('insumos', { id, nome, unidade: 'un', custo, estoque, minimo });
+  ins34('e3-cx', 'Caixa E3', 2.1, 7, 15); ins34('e3-ima', 'Ímã E3', 0.75, 12, 30); ins34('e3-arg', 'Argola E3', 0.18, 5, 0); ins34('e3-etq', 'Etiqueta E3', 0.06, 410, 100);
+  put('produtos', { id: 'e3-chave', nome: 'Chaveiro E3', materiais: [{ filamentoId: 'e3-preto', pesoG: 9 }, { filamentoId: 'e3-branco', pesoG: 3 }], insumos: [{ insumoId: 'e3-arg', qtd: 1 }], horas: 0.6, estoque: 0, precos: { direta: 14 } });
+  put('produtos', { id: 'e3-suporte', nome: 'Suporte E3', materiais: [{ filamentoId: 'e3-preto', pesoG: 48 }], insumos: [], horas: 2.4, estoque: 0, precos: { direta: 29 } });
+  put('produtos', { id: 'e3-arvore', nome: 'Árvore E3', materiais: [{ filamentoId: 'e3-verde', pesoG: 95 }, { filamentoId: 'e3-dour', pesoG: 14 }], insumos: [{ insumoId: 'e3-cx', qtd: 1 }], horas: 4.6, estoque: 0, precos: { direta: 69 } });
+  put('produtos', { id: 'e3-cabos', nome: 'Organizador E3', materiais: [{ filamentoId: 'e3-cinza', pesoG: 16 }], insumos: [], horas: 0.9, estoque: 14, precos: { direta: 19 } });
+  const ord34 = (id, produtoId, qtd, ordem) => put('ordens', { id, produtoId, qtd, status: 'fila', data: hoje(), prazo: '', clienteId: '', obs: '', criadoEm: ha(120), ordem });
+  ord34('e3-o1', 'e3-arvore', 4, 101); ord34('e3-o2', 'e3-chave', 20, 102); ord34('e3-o3', 'e3-suporte', 4, 103);
+  const comp34 = (id, dd, f, fo, g, v) => put('compras', { id, data: addDias(hoje(), dd), filamentoId: f, fornecedorId: fo, pesoG: g, valor: v, precoKg: v / (g / 1000), obs: '', criadoEm: ha(6000 - dd) });
+  comp34('e3-c1', -58, 'e3-preto', 'e3-fo2', 1000, 103.9); comp34('e3-c2', -21, 'e3-preto', 'e3-fo1', 1000, 104.5); comp34('e3-c3', -25, 'e3-dour', 'e3-fo2', 1000, 139);
+  await pausa(300);
+  await tenta(['O que comprar: os níveis (falta, acabou, acabando, vai e ok) e a falta da fila inteira (faltam 207 g e tem 165 g de preto; faltam 15 argolas)',
+    'O que comprar: do mais urgente para o menos (falta, acabou, acabando, vai), filamento antes de insumo no empate',
+    'O que comprar: a falta é a mesma conta da coluna Filamento da fila (a soma do que falta em cada ordem: 15 g + 192 g)',
+    'O que comprar: o alerta de 200 g e o mínimo dos insumos continuam os de antes (todo aviso de filamento e insumo está na lista; o resto é a fila)',
+    'O que comprar: só leitura (montar o Painel, Compras e a lista copiada não muda nada no banco)'], async () => {
+    const sit = id => materiaisParaComprar().todos.find(m => m.id === id), p = sit('e3-preto'), a = sit('e3-arg');
+    const niveis = ['e3-preto', 'e3-arg', 'e3-transl', 'e3-dour', 'e3-cx', 'e3-ima', 'e3-verde', 'e3-branco', 'e3-cinza', 'e3-etq'].map(id => id.slice(3) + ':' + sit(id).nivel).join();
+    ok('O que comprar: os níveis (falta, acabou, acabando, vai e ok) e a falta da fila inteira (faltam 207 g e tem 165 g de preto; faltam 15 argolas)',
+      niveis === 'preto:falta,arg:falta,transl:acabou,dour:acabando,cx:acabando,ima:acabando,verde:vai,branco:ok,cinza:ok,etq:ok' && p.falta === 207 && p.tem === 165 && p.fila === 372 &&
+      a.falta === 15 && a.tem === 5 && a.fila === 20 && sit('e3-verde').sobra === 30, { niveis, p: [p.falta, p.tem, p.fila], a: [a.falta, a.tem, a.fila] });
+    const ordem = materiaisParaComprar().comprar.map(m => m.id.slice(3)).join();
+    ok('O que comprar: do mais urgente para o menos (falta, acabou, acabando, vai), filamento antes de insumo no empate', ordem === 'preto,arg,transl,dour,cx,ima,verde', ordem);
+    const m = materialDaFila(), somaFalta = id => [...m.por.values()].reduce((s, r) => s + [...r.fils, ...r.ins].filter(x => x.id === id).reduce((t, x) => t + x.falta, 0), 0);
+    ok('O que comprar: a falta é a mesma conta da coluna Filamento da fila (a soma do que falta em cada ordem: 15 g + 192 g)', somaFalta('e3-preto') === p.falta && somaFalta('e3-arg') === a.falta &&
+      m.por.get('e3-o2').fils.find(x => x.id === 'e3-preto').falta === 15 && m.por.get('e3-o3').fils.find(x => x.id === 'e3-preto').falta === 192, [somaFalta('e3-preto'), somaFalta('e3-arg')]);
+    const lista = materiaisParaComprar().comprar, ids = new Set(lista.map(x => x.id)), avisos = alertas().filter(x => x.k === 'filamento' || x.k === 'insumo').map(x => x.id);
+    const sobra = lista.filter(x => x.nivel !== 'falta' && x.nivel !== 'vai' && !avisos.includes(x.id)).map(x => x.id);
+    ok('O que comprar: o alerta de 200 g e o mínimo dos insumos continuam os de antes (todo aviso de filamento e insumo está na lista; o resto é a fila)', avisos.length === 5 && avisos.every(id => ids.has(id)) && !sobra.length &&
+      lista.every(x => x.nivel !== 'ok'), { avisos, sobra });
+    const antes = bancoTexto(), mats = JSON.stringify([S.filamentos, S.insumos]);
+    VIEWS.painel(); VIEWS.compras(); cadListaComprar('painel'); cadTextoLista(lista);
+    await pausa(200);
+    ok('O que comprar: só leitura (montar o Painel, Compras e a lista copiada não muda nada no banco)', bancoTexto() === antes && JSON.stringify([S.filamentos, S.insumos]) === mats && !temPendencias(), 0);
+  });
+  await tenta(['Painel: O que comprar no lugar de Material acabando (#op-material), com Comprei ou Repor e Já pedi em cada linha e Copiar lista',
+    'Painel: cada linha diz o que falta ou o que tem ("faltam 207 g · tem 165 g", "acabou", "vão sobrar 30 g") e o terceiro ícone do celular leva a O que comprar',
+    'Painel: lista longa mostra os mais urgentes (5) e "Ver mais"', 'Compras: a lista completa, com o que a fila usa e a última compra'], async () => {
+    const p = VIEWS.painel(), s = secao34(p, 'op-material'), li = linhas34(p, 'op-material'), b = (l, rot) => l && $$('button', l).find(x => x.textContent.trim() === rot);
+    ok('Painel: O que comprar no lugar de Material acabando (#op-material), com Comprei ou Repor e Já pedi em cada linha e Copiar lista', !!s && s.classList.contains('op-bloco') && !/Material acabando/.test(p) &&
+      txt34($('h2', s)) === 'O que comprar 7' && li.length === 5 && li.every(l => !!b(l, 'Já pedi') && (b(l, 'Comprei') || b(l, 'Repor'))) && b(li[0], 'Comprei').getAttribute('onclick') === 'cadComprei(this.dataset.t, this.dataset.id)' &&
+      b(li[0], 'Comprei').dataset.id === 'e3-preto' && b(li[1], 'Repor').dataset.t === 'ins' && b(li[0], 'Já pedi').getAttribute('onclick') === 'cadPedi(this.dataset.t, this.dataset.id)' &&
+      b(li[0], 'Comprei').classList.contains('op-acao') && !!$$('button', s).find(x => x.textContent === 'Copiar lista'), s && txt34(s).slice(0, 400));
+    opListaAberta.comprar = true; const todas = linhas34(VIEWS.painel(), 'op-material').map(linha34); opListaAberta.comprar = false;
+    ok('Painel: cada linha diz o que falta ou o que tem ("faltam 207 g · tem 165 g", "acabou", "vão sobrar 30 g") e o terceiro ícone do celular leva a O que comprar',
+      todas.join(' / ') === 'PLA Preto E3 | faltam 207 g · tem 165 g | Comprei Já pedi / Argola E3 | faltam 15 un · tem 5 un | Repor Já pedi / PETG Translúcido E3 | acabou · aviso em 200 g | Comprei Já pedi / ' +
+      'PLA Dourado E3 | tem 118 g · a fila usa 56 g | Comprei Já pedi / Caixa E3 | tem 7 un · mínimo 15 | Repor Já pedi / Ímã E3 | tem 12 un · mínimo 30 | Repor Já pedi / PLA Verde E3 | vão sobrar 30 g · tem 410 g | Comprei Já pedi' &&
+      /aria-label="O que comprar: 7" onclick="opIrBloco\('op-material'\)"/.test(p), todas);
+    ok('Painel: lista longa mostra os mais urgentes (5) e "Ver mais"', li.length === 5 && !!$$('button', s).find(x => x.textContent === 'Ver mais 2' && x.getAttribute('onclick') === "opAlternarLista('comprar')") && todas.length === 7, [li.length, todas.length]);
+    const c = linhas34(VIEWS.compras(), 'cad-comprar').map(linha34);
+    ok('Compras: a lista completa, com o que a fila usa e a última compra', c.length === 7 && /^PLA Preto E3 \| faltam 207 g · tem 165 g · a fila usa 372 g · última: R\$ 104,50 na Voolt E3 \(\d\d\/\d\d\) \| Comprei Já pedi$/.test(c[0]) &&
+      /^PLA Dourado E3 \| tem 118 g · aviso em 200 g · a fila usa 56 g · última: R\$ 139,00 na Lab E3 \(\d\d\/\d\d\) \| Comprei Já pedi$/.test(c[3]), c);
+  });
+  await tenta(['Copiar lista: o texto para o WhatsApp tem o que comprar, em filamento e insumos, com a quantidade (rolos que cobrem o que falta) e a última compra',
+    'Copiar lista: depois de copiar, o aviso oferece "Marcar tudo como pedido" (sem área de transferência, o texto abre numa janela para copiar à mão)',
+    'Copiar lista: "Marcar tudo como pedido" marca tudo o que estava na lista, com Desfazer (o banco volta ao que era)'], async () => {
+    await assenta34();
+    const lista = materiaisParaComprar().comprar, t = cadTextoLista(lista);
+    const esperado = `Lista de compras — Nexos (${dataBR(hoje())})\n\nFilamento\n• PLA Preto E3: 1 kg (última: ${brl(104.5)}, Voolt E3)\n• PETG Translúcido E3: 1 kg\n• PLA Dourado E3: 1 kg (última: ${brl(139)}, Lab E3)\n• PLA Verde E3: 1 kg` +
+      '\n\nInsumos\n• Argola E3: 20 un\n• Caixa E3: 30 un\n• Ímã E3: 50 un';
+    ok('Copiar lista: o texto para o WhatsApp tem o que comprar, em filamento e insumos, com a quantidade (rolos que cobrem o que falta) e a última compra', t === esperado, t);
+    limparAvisos();
+    await cadCopiarLista();
+    const bt = $$('#toasts .toast.com-acao button').find(x => x.textContent === 'Marcar tudo como pedido'), janela = $('#cadListaTxt');
+    ok('Copiar lista: depois de copiar, o aviso oferece "Marcar tudo como pedido" (sem área de transferência, o texto abre numa janela para copiar à mão)',
+      (!!bt && avisos32().some(x => /^Lista copiada\. Cole no WhatsApp\./.test(x))) || (!!janela && janela.value === esperado), [!!bt, !!janela, avisos32()]);
+    if ($('#modal.open')) fecharModal();
+    $$('#toasts .toast').forEach(x => (x._sair ? x._sair() : x.remove()));
+    const antes = bancoTexto();
+    cadMarcarTudo(lista);
+    await pausa(300);
+    const marcados = lista.filter(m => !!(noBanco(m.t === 'fil' ? 'filamentos' : 'insumos', m.id) || {}).pedidoEm).length, aviso = avisos32().find(x => /^7 itens marcados como pedido\.Desfazer$/.test(x));
+    const caminho = materiaisParaComprar().caminho.length;
+    desfazer33();
+    await pausa(300);
+    ok('Copiar lista: "Marcar tudo como pedido" marca tudo o que estava na lista, com Desfazer (o banco volta ao que era)', marcados === 7 && caminho === 7 && !!aviso && bancoTexto() === antes &&
+      avisos32().some(x => /^Desfeito: 7 itens voltaram para a lista do que comprar\./.test(x)), [marcados, caminho, avisos32()]);
+  });
+  await tenta(['Comprei: a janela de compra de hoje abre com o fornecedor, o peso e o valor da última compra, marcados "Igual à última", e o cursor no valor, selecionado',
+    'Comprei: registrar sem mudar nada grava a compra igual à última e soma ao estoque',
+    'Comprei: a compra guarda o preço médio e o estoque de antes e o preço médio que ficou depois',
+    'Comprei: mudar um campo troca a marca dele para "Última: ..."; trocar o filamento na janela traz a última compra do novo (no que a pessoa não mexeu)',
+    'Comprei: filamento sem compra anterior abre como sempre (1 kg, valor em branco, sem fornecedor)',
+    'Comprei: Registrar compra sem filamento escolhido abre com o valor em branco (como sempre); escolher o filamento traz a última compra dele'], async () => {
+    cadComprei('fil', 'e3-preto');
+    const f = $('#modal form'), campo = k => campoDoForm(f, k), v = campo('valor');
+    const selecionado = document.activeElement === v && v.selectionStart === 0 && v.selectionEnd === v.value.length;
+    ok('Comprei: a janela de compra de hoje abre com o fornecedor, o peso e o valor da última compra, marcados "Igual à última", e o cursor no valor, selecionado',
+      txt34($('#modal h3')) === 'Registrar compra de filamento' && campo('filamentoId').value === 'e3-preto' && campo('fornecedorId').value === 'e3-fo1' && campo('pesoG').value === '1000' && v.value === '104,50' &&
+      ['fornecedorId', 'pesoG', 'valor'].every(k => /^Igual à última \(\d\d\/\d\d\)/.test(dica34(campo(k))) && campo(k).classList.contains('cad-igual')) && selecionado,
+      { forn: campo('fornecedorId').value, peso: campo('pesoG').value, valor: v.value, dicas: ['fornecedorId', 'pesoG', 'valor'].map(k => dica34(campo(k))), ativo: document.activeElement && document.activeElement.name, selecionado });
+    const est0 = noBanco('filamentos', 'e3-preto').estoqueG;
+    f.requestSubmit();
+    await pausa(300);
+    const novas = linhas32(d => d.filamentoId === 'e3-preto' && /^cp-/.test(d.id)).map(l => l.d), c = novas[0] || {};
+    ok('Comprei: registrar sem mudar nada grava a compra igual à última e soma ao estoque', !$('#modal.open') && novas.length === 1 && c.fornecedorId === 'e3-fo1' && c.pesoG === 1000 && c.valor === 104.5 &&
+      c.data === hoje() && noBanco('filamentos', 'e3-preto').estoqueG === est0 + 1000, { novas, est: noBanco('filamentos', 'e3-preto').estoqueG, est0 });
+    ok('Comprei: a compra guarda o preço médio e o estoque de antes e o preço médio que ficou depois', c.precoAntes === 104 && c.estAntes === 165 && c.precoDepois === arred((165 / 1000 * 104 + 104.5) / (1165 / 1000), 2) &&
+      noBanco('filamentos', 'e3-preto').precoKg === c.precoDepois, c);
+    cadComprei('fil', 'e3-preto');
+    const f2 = $('#modal form'), c2 = k => campoDoForm(f2, k);
+    c2('valor').value = '110'; c2('valor').dispatchEvent(new Event('input', { bubbles: true }));
+    const marcaValor = dica34(c2('valor')), igualValor = c2('valor').classList.contains('cad-igual');
+    c2('filamentoId').value = 'e3-dour'; c2('filamentoId').dispatchEvent(new Event('input', { bubbles: true }));
+    ok('Comprei: mudar um campo troca a marca dele para "Última: ..."; trocar o filamento na janela traz a última compra do novo (no que a pessoa não mexeu)',
+      /^Última: R\$\s104,50 \(\d\d\/\d\d\)/.test(marcaValor) && !igualValor && c2('valor').value === '110' && c2('fornecedorId').value === 'e3-fo2' && c2('pesoG').value === '1000' &&
+      /^Igual à última/.test(dica34(c2('fornecedorId'))) && /^Última: R\$\s139,00/.test(dica34(c2('valor'))), { marcaValor, valor: c2('valor').value, forn: c2('fornecedorId').value, dicas: [dica34(c2('fornecedorId')), dica34(c2('valor'))] });
+    if (FORM) FORM.sujo = false; fecharModal();
+    cadComprei('fil', 'e3-cinza');
+    const c3 = k => campoDoForm($('#modal form'), k);
+    ok('Comprei: filamento sem compra anterior abre como sempre (1 kg, valor em branco, sem fornecedor)', c3('pesoG').value === '1000' && c3('valor').value === '' && c3('fornecedorId').value === '' &&
+      !$$('#modal .cad-igual').length && document.activeElement === c3('valor'), [c3('pesoG').value, c3('valor').value, c3('fornecedorId').value]);
+    if (FORM) FORM.sujo = false; fecharModal();
+    cadNovaCompra();                                                  // Registrar compra, sem filamento escolhido
+    const c4 = k => campoDoForm($('#modal form'), k), vazio = c4('valor').value === '' && !$$('#modal .cad-igual').length;
+    c4('filamentoId').value = 'e3-preto'; c4('filamentoId').dispatchEvent(new Event('input', { bubbles: true }));
+    ok('Comprei: Registrar compra sem filamento escolhido abre com o valor em branco (como sempre); escolher o filamento traz a última compra dele', vazio && c4('valor').value === '104,50' &&
+      c4('fornecedorId').value === 'e3-fo1' && c4('valor').classList.contains('cad-igual'), [vazio, c4('valor').value, c4('fornecedorId').value]);
+  });
+  await tenta(['Comprei: valor fora do comum (1045 no lugar de 104,50) aparece em vermelho antes de gravar ("10 vezes o preço médio")',
+    'Comprei: valor fora do comum pergunta ao salvar, com o cursor em "Corrigir o valor"; nada é gravado até a resposta',
+    'Comprei: "Corrigir o valor" volta para a janela com o valor selecionado; "Registrar assim mesmo" grava',
+    'Repor: valor fora do comum também aparece em vermelho e pergunta (pelo custo por unidade)'], async () => {
+    await assenta34();
+    cadComprei('fil', 'e3-preto');
+    const f = $('#modal form'), v = campoDoForm(f, 'valor');
+    v.value = '1045'; v.dispatchEvent(new Event('input', { bubbles: true }));
+    const conf = txt34($('#modal .cad-conf'));
+    ok('Comprei: valor fora do comum (1045 no lugar de 104,50) aparece em vermelho antes de gravar ("10 vezes o preço médio")', /^Confira o valor\. R\$\s1\.045,00 por kg é 10 vezes o preço médio \(R\$\s104,43\)\.$/.test(conf), conf);
+    const antes = bancoTexto();
+    f.requestSubmit();
+    await pausa(100);
+    const pq = pergunta33(), bs = $$('#modal .pergunta-botoes .btn');
+    ok('Comprei: valor fora do comum pergunta ao salvar, com o cursor em "Corrigir o valor"; nada é gravado até a resposta', !!pq && pq.titulo === 'Confira o valor' && /PLA Preto E3 a R\$\s1\.045,00 por kg é 10 vezes o preço médio/.test(pq.texto) &&
+      pq.botoes.join('|') === 'Registrar assim mesmo|Corrigir o valor' && document.activeElement === bs[1] && bancoTexto() === antes, { pq, ativo: document.activeElement && document.activeElement.textContent });
+    resposta33('Corrigir o valor');
+    const volta = !$('#modal .caixa.pergunta') && !f.hidden && document.activeElement === v && v.selectionStart === 0 && v.selectionEnd === v.value.length;
+    if (FORM) FORM.sujo = false; fecharModal();
+    cadComprei('fil', 'e3-cinza');
+    setCampo('valor', 970);
+    $('#modal form').requestSubmit();
+    await pausa(100);
+    const pq2 = pergunta33();
+    resposta33('Registrar assim mesmo');
+    await pausa(300);
+    ok('Comprei: "Corrigir o valor" volta para a janela com o valor selecionado; "Registrar assim mesmo" grava', volta && !!pq2 && linhas32(d => d.filamentoId === 'e3-cinza' && d.valor === 970).length === 1 && !$('#modal.open'),
+      [volta, !!pq2, linhas32(d => d.filamentoId === 'e3-cinza').length]);
+    cadComprei('ins', 'e3-ima');
+    const fi = $('#modal form');
+    campoDoForm(fi, 'qtd').value = '10'; campoDoForm(fi, 'valor').value = '50'; campoDoForm(fi, 'valor').dispatchEvent(new Event('input', { bubbles: true }));
+    const confI = txt34($('#modal .cad-conf'));
+    fi.requestSubmit();
+    await pausa(100);
+    const pi = pergunta33();
+    ok('Repor: valor fora do comum também aparece em vermelho e pergunta (pelo custo por unidade)', /^Confira o valor\. R\$\s5,00 por un é 6,7 vezes o preço médio \(R\$\s0,75\)\.$/.test(confI) && !!pi && pi.titulo === 'Confira o valor' &&
+      !linhas32(d => d.insumoId === 'e3-ima').length, [confI, pi]);
+  });
+  await tenta(['Repor: a reposição de hoje abre com a quantidade e o valor da última (lida do lançamento no Financeiro), marcados "Igual à última", e o cursor no valor',
+    'Repor: o lançamento guarda o insumo e a quantidade (a próxima já vem com ela), e repor tira a marca do "Já pedi"',
+    'Repor: lançamento de antes da versão 19 (sem o código do insumo) também vale, pela descrição'], async () => {
+    put('lancamentos', { id: 'e3-l-antigo', data: addDias(hoje(), -10), tipo: 'gasto', categoria: 'Insumos', descricao: 'Reposição: Caixa E3 (1.250,5 un)', valor: 2100, fixo: false, criadoEm: ha(14400) });
+    await pausa();
+    const u = ultimaReposicao(byId('insumos', 'e3-cx'));
+    ok('Repor: lançamento de antes da versão 19 (sem o código do insumo) também vale, pela descrição', !!u && u.qtd === 1250.5 && u.valor === 2100 && u.id === 'e3-l-antigo', u);
+    cadComprei('ins', 'e3-cx');
+    const f = $('#modal form'), q = campoDoForm(f, 'qtd'), v = campoDoForm(f, 'valor');
+    ok('Repor: a reposição de hoje abre com a quantidade e o valor da última (lida do lançamento no Financeiro), marcados "Igual à última", e o cursor no valor',
+      txt34($('#modal h3')) === 'Repor Caixa E3' && q.value === '1250,5' && v.value === '2100,00' && /^Igual à última \(\d\d\/\d\d\)/.test(dica34(q)) && /^Igual à última/.test(dica34(v)) && document.activeElement === v,
+      [q.value, v.value, dica34(q), dica34(v)]);
+    marcarPedido('insumos', 'e3-cx', 'Ana');
+    q.value = '50'; v.value = '105'; q.dispatchEvent(new Event('input', { bubbles: true }));
+    f.requestSubmit();
+    await pausa(300);
+    const l = linhas32(d => d.categoria === 'Insumos' && d.insumoId === 'e3-cx').map(x => x.d), ins = noBanco('insumos', 'e3-cx');
+    ok('Repor: o lançamento guarda o insumo e a quantidade (a próxima já vem com ela), e repor tira a marca do "Já pedi"', l.length === 1 && l[0].qtd === 50 && l[0].valor === 105 && /^rp-e3-cx-/.test(l[0].id) &&
+      !ins.pedidoEm && !ins.pedidoPor && ins.estoque === 57 && (ultimaReposicao(byId('insumos', 'e3-cx')) || {}).qtd === 50, { l, ins });
+  });
+  await tenta(['Comprei: o preço médio, o estoque e o preço por kg da compra são exatamente a conta da versão 18 (300 compras sorteadas)',
+    'Repor: o custo médio, o estoque e o lançamento são exatamente a conta da versão 18 (300 reposições sorteadas)'], async () => {
+    // a conta da versão 18 (registrarCompra e reporInsumo de calc.js no commit f417176), sem gravar nada
+    const v18Compra = (f, d) => { const g = num(d.pesoG), valor = num(d.valor), r = { f: { ...f } };
+      if (g > 0) { const est = Math.max(0, num(r.f.estoqueG)); r.f.precoKg = arred((est / 1000 * num(r.f.precoKg) + valor) / ((est + g) / 1000), 2); r.f.estoqueG = arred(num(r.f.estoqueG) + g, 2); r.media = { p: 'precoKg', q: 'estoqueG', n: g, v: valor, e: 1000, k: 2 }; }
+      r.c = { pesoG: g, valor, precoKg: g > 0 ? valor / (g / 1000) : 0 };
+      return r; };
+    const v18Repor = (i, qtd, valor) => { qtd = num(qtd); valor = num(valor); const r = { i: { ...i } };
+      if (qtd <= 0) return r;
+      const est = Math.max(0, num(r.i.estoque));
+      if (valor > 0) r.i.custo = arred((est * num(r.i.custo) + valor) / (est + qtd), 4);
+      r.i.estoque = arred(num(r.i.estoque) + qtd, 3);
+      r.media = valor > 0 ? { p: 'custo', q: 'estoque', n: qtd, v: valor, e: 1, k: 4 } : null;
+      r.l = valor > 0 ? { valor, descricao: `Reposição: ${i.nome} (${nf(qtd, 2)} ${i.unidade || 'un'})` } : null;
+      return r; };
+    let semente = 34;
+    const sorte = () => { semente = (semente * 1103515245 + 12345) % 2147483648; return semente / 2147483648; };
+    const putReal = put, gravados = [], certos = { compras: 0, reposicoes: 0 }, difs = [];
+    try {
+      put = (col, rec, opts = {}) => { gravados.push({ col, rec: copia(rec), opts: copia(opts) }); return rec; };   // nada vai para o banco
+      for (let n = 0; n < 300; n++) {
+        const f0 = { id: 'e3-sorteio-f', nome: 'Sorteio', precoKg: arred(sorte() * 300, sorte() < 0.5 ? 2 : 0), estoqueG: arred(sorte() * 4000 - 800, sorte() < 0.5 ? 2 : 0) }, f = { ...f0 };
+        const d = { data: hoje(), filamentoId: f0.id, fornecedorId: '', pesoG: [250, 500, 1000, 2000, 750, arred(sorte() * 3000, 1), 0][Math.floor(sorte() * 7)], valor: arred(sorte() * 600, sorte() < 0.7 ? 2 : 0) };
+        const e = v18Compra(f0, d);
+        S.filamentos.push(f); gravados.length = 0;
+        try { registrarCompra(d); } finally { S.filamentos.splice(S.filamentos.indexOf(f), 1); }
+        const gf = gravados.find(x => x.col === 'filamentos'), gc = gravados.find(x => x.col === 'compras');
+        const certoF = num(d.pesoG) > 0 ? !!gf && gf.rec.precoKg === e.f.precoKg && gf.rec.estoqueG === e.f.estoqueG && iguais(gf.opts.media, e.media) : !gf;
+        if (certoF && !!gc && gc.rec.pesoG === e.c.pesoG && gc.rec.valor === e.c.valor && gc.rec.precoKg === e.c.precoKg) certos.compras++; else if (difs.length < 3) difs.push({ f0, d, gf, gc, e });
+      }
+      for (let n = 0; n < 300; n++) {
+        const i0 = { id: 'e3-sorteio-i', nome: 'Sorteio', unidade: ['un', 'm', 'ml'][n % 3], custo: arred(sorte() * 5, 4), estoque: arred(sorte() * 300 - 50, sorte() < 0.5 ? 3 : 0), minimo: 0 }, i = { ...i0 };
+        const qtd = [1, 10, 50, 0.5, arred(sorte() * 500, 2), 0][Math.floor(sorte() * 6)], valor = sorte() < 0.15 ? 0 : arred(sorte() * 300, 2);
+        const e = v18Repor(i0, qtd, valor);
+        S.insumos.push(i); gravados.length = 0;
+        try { reporInsumo(i, qtd, valor, hoje(), 'e3-sorteio-l'); } finally { S.insumos.splice(S.insumos.indexOf(i), 1); }
+        const gi = gravados.find(x => x.col === 'insumos'), gl = gravados.find(x => x.col === 'lancamentos');
+        const certoI = num(qtd) > 0 ? !!gi && gi.rec.custo === e.i.custo && gi.rec.estoque === e.i.estoque && iguais(gi.opts.media || null, e.media) : !gi;
+        if (certoI && (e.l ? !!gl && gl.rec.valor === e.l.valor && gl.rec.descricao === e.l.descricao && gl.rec.categoria === 'Insumos' && gl.rec.tipo === 'gasto' : !gl)) certos.reposicoes++;
+        else if (difs.length < 3) difs.push({ i0, qtd, valor, gi, gl, e });
+      }
+    } finally { put = putReal; }
+    ok('Comprei: o preço médio, o estoque e o preço por kg da compra são exatamente a conta da versão 18 (300 compras sorteadas)', certos.compras === 300, { certos, difs });
+    ok('Repor: o custo médio, o estoque e o lançamento são exatamente a conta da versão 18 (300 reposições sorteadas)', certos.reposicoes === 300, { certos, difs });
+  });
+  await tenta(['Já pedi: 1 toque marca quem pediu e quando (no modo demonstração, "você")',
+    'Já pedi: a linha fica no lugar (não pula debaixo do dedo), com "pedido hoje por você", Chegou e desfazer no lugar de Comprei e Já pedi',
+    'Já pedi: o Desfazer do aviso tira a marca (o banco volta ao que era); o "desfazer" da linha também',
+    'Já pedi: ao trocar de tela, a linha vai para A caminho, com Chegou ("Chegou tudo" quando há mais de um)',
+    'Já pedi: Chegou abre a compra já preenchida com a última; registrar tira a marca sozinho'], async () => {
+    ir('painel'); render(); await pausa(100); await assenta34();
+    const antes = bancoTexto(), nomes0 = linhas34(VIEWS.painel(), 'op-material').map(l => txt34($('.op-t b', l))), n0 = materiaisParaComprar().comprar.length;
+    cadPedi('fil', 'e3-dour');
+    await pausa(300);
+    const r = noBanco('filamentos', 'e3-dour') || {};
+    ok('Já pedi: 1 toque marca quem pediu e quando (no modo demonstração, "você")', !!r.pedidoEm && Date.now() - Date.parse(r.pedidoEm) < 60000 && r.pedidoPor === 'você' && byId('filamentos', 'e3-dour').pedidoEm === r.pedidoEm, [r.pedidoEm, r.pedidoPor]);
+    const lis = linhas34(VIEWS.painel(), 'op-material'), li = lis.map(linha34), s = secao34(VIEWS.painel(), 'op-material'), k = nomes0.indexOf('PLA Dourado E3');
+    ok('Já pedi: a linha fica no lugar (não pula debaixo do dedo), com "pedido hoje por você", Chegou e desfazer no lugar de Comprei e Já pedi', k >= 0 && li[k] === 'PLA Dourado E3 | pedido hoje por você | Chegou desfazer' &&
+      lis.map(l => txt34($('.op-t b', l))).join() === nomes0.join() && !/A caminho/.test(txt34(s)) && txt34($('h2', s)) === 'O que comprar ' + (n0 - 1), { nomes0, li });
+    desfazer33();
+    await pausa(300);
+    const desfeito = bancoTexto() === antes && !byId('filamentos', 'e3-dour').pedidoEm && avisos32().some(t => /^Desfeito: PLA Dourado E3 voltou para a lista do que comprar\./.test(t));
+    cadPedi('fil', 'e3-dour'); await pausa(300);
+    cadDesmarcar('fil', 'e3-dour'); await pausa(300);
+    ok('Já pedi: o Desfazer do aviso tira a marca (o banco volta ao que era); o "desfazer" da linha também', desfeito && bancoTexto() === antes && !$$('#toasts .toast.com-acao').length, [desfeito, avisos32().slice(-3)]);
+    cadPedi('fil', 'e3-dour'); cadPedi('ins', 'e3-ima');
+    await pausa(300);
+    location.hash = 'compras'; await pausa(200); location.hash = 'painel'; await pausa(200);
+    const s2 = secao34(VIEWS.painel(), 'op-material'), grupo = s2 && $('.cad-grupo', s2), caminho = s2 ? $$('.cad-grupo + .op-lista li', s2).map(linha34) : [];
+    ok('Já pedi: ao trocar de tela, a linha vai para A caminho, com Chegou ("Chegou tudo" quando há mais de um)', !!grupo && txt34($('span', grupo)) === 'A caminho' && txt34($('button', grupo)) === 'Chegou tudo' &&
+      caminho.join(' / ') === 'PLA Dourado E3 | pedido hoje por você · tem 118 g | Chegou / Ímã E3 | pedido hoje por você · tem 12 un | Chegou' &&
+      !$$('#op-material .op-lista li', dom34(VIEWS.painel())).some(x => /Dourado/.test(x.textContent) && /Já pedi/.test(x.textContent)), caminho);
+    cadComprei('fil', 'e3-dour');
+    const f = $('#modal form'), pre = ['fornecedorId', 'pesoG', 'valor'].map(k => campoDoForm(f, k).value).join('|');
+    f.requestSubmit();
+    await pausa(300);
+    const d2 = noBanco('filamentos', 'e3-dour') || {};
+    ok('Já pedi: Chegou abre a compra já preenchida com a última; registrar tira a marca sozinho', pre === 'e3-fo2|1000|139,00' && !d2.pedidoEm && !d2.pedidoPor && d2.estoqueG === 1118 &&
+      !materiaisParaComprar().caminho.some(m => m.id === 'e3-dour'), [pre, d2]);
+  });
+  await tenta(['Já pedi: os dois aparelhos marcando juntos deixam uma marca só (e a tela mostra uma linha em A caminho)',
+    'Já pedi: o Desfazer não apaga a marca que outra pessoa pôs depois',
+    'Já pedi: marca esquecida mostra "pedido há 9 dias por Ana" (em amarelo) e continua visível em A caminho, com Não veio em Compras',
+    'Já pedi: Não veio (Compras) tira a marca esquecida, com Desfazer'], async () => {
+    await assenta34();
+    outroPC([{ n: 81, ops: [{ c: 'insumos', i: 'e3-arg', t: 'mudar', p: [{ s: { pedidoEm: agoraISO(), pedidoPor: 'Sócio' } }] }] }]);
+    cadPedi('ins', 'e3-arg');                                        // este PC ainda não sabe
+    await pausa(300);
+    await carregarTudo(true);
+    const b = noBanco('insumos', 'e3-arg') || {}, t = byId('insumos', 'e3-arg') || {};
+    ok('Já pedi: os dois aparelhos marcando juntos deixam uma marca só (e a tela mostra uma linha em A caminho)', typeof b.pedidoEm === 'string' && !!b.pedidoEm && ['você', 'Sócio'].includes(b.pedidoPor) &&
+      t.pedidoEm === b.pedidoEm && t.pedidoPor === b.pedidoPor && materiaisParaComprar().caminho.filter(m => m.id === 'e3-arg').length === 1, [b, t]);
+    cadPedi('fil', 'e3-preto');
+    await pausa(300);
+    outroPC([{ n: 82, ops: [{ c: 'filamentos', i: 'e3-preto', t: 'mudar', p: [{ s: { pedidoEm: new Date(Date.now() + 1000).toISOString(), pedidoPor: 'Sócio' } }] }] }]);
+    await carregarTudo(true);
+    tiraAvisos34();
+    desfazer33();
+    await pausa(300);
+    ok('Já pedi: o Desfazer não apaga a marca que outra pessoa pôs depois', (noBanco('filamentos', 'e3-preto') || {}).pedidoPor === 'Sócio' && avisos32().some(x => /Isto já mudou depois\. Nada foi desfeito\./.test(x)), [noBanco('filamentos', 'e3-preto'), avisos32()]);
+    outroPC([{ n: 83, ops: [{ c: 'filamentos', i: 'e3-transl', t: 'mudar', p: [{ s: { pedidoEm: addDias(hoje(), -9), pedidoPor: 'Ana' } }] }] }]);
+    await carregarTudo(true);
+    const daTransl = (h, id) => $$('li', secao34(h, id) || document.createElement('div')).find(x => x.querySelector('[data-id="e3-transl"]'));
+    const lp = daTransl(VIEWS.painel(), 'op-material'), lc = daTransl(VIEWS.compras(), 'cad-comprar');
+    ok('Já pedi: marca esquecida mostra "pedido há 9 dias por Ana" (em amarelo) e continua visível em A caminho, com Não veio em Compras', !!lp && /pedido há 9 dias por Ana/.test(lp.textContent) && !!$('small .aviso', lp) &&
+      /Chegou/.test(lp.textContent) && !/Não veio/.test(lp.textContent) && !!lc && /Não veio/.test(lc.textContent), [lp && txt34(lp), lc && txt34(lc)]);
+    const antes = bancoTexto();
+    cadNaoVeio('fil', 'e3-transl');
+    await pausa(300);
+    const tirou = !(noBanco('filamentos', 'e3-transl') || {}).pedidoEm && materiaisParaComprar().comprar.some(m => m.id === 'e3-transl');
+    desfazer33();
+    await pausa(300);
+    ok('Já pedi: Não veio (Compras) tira a marca esquecida, com Desfazer', tirou && bancoTexto() === antes && (noBanco('filamentos', 'e3-transl') || {}).pedidoPor === 'Ana', [tirou, noBanco('filamentos', 'e3-transl')]);
+  });
+  await tenta(['Chegou tudo: com mais de um a caminho, uma compra de cada vez, cada janela já preenchida com a última ("1 de 3", "2 de 3"...)',
+    'Chegou tudo: registrar uma abre a próxima; o segundo toque (ou Enter) logo depois não grava a próxima sem ela ser vista',
+    'Chegou tudo: fechar a janela para por ali (o que faltou continua em A caminho)'], async () => {
+    // a caminho, do mais urgente para o menos: o ímã (acabando), o preto e o dourado
+    ['insumos/e3-arg', 'filamentos/e3-transl'].forEach(k => tirarPedido(...k.split('/')));
+    marcarPedido('filamentos', 'e3-dour', 'Ana');
+    await pausa(300);
+    const titulo = () => txt34($('#modal.open h3'));
+    const caminho = materiaisParaComprar().caminho.map(m => m.id).join();
+    cadChegouTudo();
+    const t1 = titulo();
+    setCampo('qtd', 50); setCampo('valor', 37.5);
+    $('#modal form').requestSubmit();
+    await pausa(60);
+    const t2 = titulo(), v2 = (campoDoForm($('#modal form'), 'valor') || {}).value, compras0 = linhas32(d => d.filamentoId === 'e3-preto' && /^cp-/.test(d.id)).length;
+    ok('Chegou tudo: com mais de um a caminho, uma compra de cada vez, cada janela já preenchida com a última ("1 de 3", "2 de 3"...)', caminho === 'e3-ima,e3-preto,e3-dour' && t1 === 'Repor Ímã E3 (1 de 3)' &&
+      t2 === 'Registrar compra de filamento (2 de 3)' && v2 === '104,50', [caminho, t1, t2, v2]);
+    $('#modal form').requestSubmit();                                 // o segundo toque, logo em seguida
+    await pausa(150);
+    const ignorou = titulo() === t2 && linhas32(d => d.filamentoId === 'e3-preto' && /^cp-/.test(d.id)).length === compras0;
+    await pausa(800);
+    $('#modal form').requestSubmit();
+    await pausa(300);
+    const t3 = titulo(), entrou = linhas32(d => d.filamentoId === 'e3-preto' && /^cp-/.test(d.id)).length === compras0 + 1;
+    ok('Chegou tudo: registrar uma abre a próxima; o segundo toque (ou Enter) logo depois não grava a próxima sem ela ser vista', ignorou && entrou && t3 === 'Registrar compra de filamento (3 de 3)' &&
+      !(noBanco('insumos', 'e3-ima') || {}).pedidoEm && noBanco('insumos', 'e3-ima').estoque === 62 && !(noBanco('filamentos', 'e3-preto') || {}).pedidoEm, [ignorou, entrou, t3]);
+    if (FORM) FORM.sujo = false;
+    fecharForm();
+    await pausa(300);
+    ok('Chegou tudo: fechar a janela para por ali (o que faltou continua em A caminho)', !$('#modal.open') && materiaisParaComprar().caminho.map(m => m.id).join() === 'e3-dour', materiaisParaComprar().caminho.map(m => m.id));
+    tirarPedido('filamentos', 'e3-dour');
+  });
+  await tenta(['Acertar estoque: peça pronta numa janela de 1 campo (no lugar dos 19 da janela do produto), com o número de hoje selecionado',
+    'Acertar estoque: grava o número digitado ("agora tem 13 peças") e tem Desfazer, que volta ao número de antes',
+    'Acertar estoque: rolo com atalhos (acabou, ¼, ½, 1 e 2 rolos), mais e menos e "pesei com o carretel" (desconta o carretel vazio)',
+    'Acertar estoque: a janela lembra que perdeu na impressão é Falhou e chegou rolo é Comprei (no insumo, Repor)',
+    'Acertar estoque: dois ajustes ao mesmo tempo nos dois aparelhos (13 e 12): o segundo é recusado com aviso (a proteção da versão 16)',
+    'Acertar estoque: o estoque mudou no outro aparelho com a janela aberta (e chegou aqui): nada é gravado e o aviso explica',
+    'Acertar estoque: o Desfazer não volta o número se o estoque mudou depois (aqui ou só no banco)'], async () => {
+    await assenta34();
+    cadAcertar('prod', 'e3-cabos');
+    const f = $('#modal form'), campos = $$('input, select, textarea', f).filter(e => e.getClientRects().length && !['hidden', 'checkbox'].includes(e.type)), n = campoDoForm(f, 'novo');
+    ok('Acertar estoque: peça pronta numa janela de 1 campo (no lugar dos 19 da janela do produto), com o número de hoje selecionado', campos.length === 1 && n === campos[0] && n.value === '14' &&
+      document.activeElement === n && n.selectionStart === 0 && n.selectionEnd === 2 && txt34($('#modal h3')) === 'Acertar estoque' && /Organizador E3no sistema: 14 peças/.test(txt34($('#modal .cad-cab'))), [campos.length, n && n.value]);
+    const antes = bancoTexto();
+    n.value = '13'; n.dispatchEvent(new Event('input', { bubbles: true }));
+    const dif = txt34($('#modal .cad-dif'));
+    f.requestSubmit();
+    await pausa(300);
+    const agora = (noBanco('produtos', 'e3-cabos') || {}).estoque, aviso = avisos32().find(x => /^Organizador E3: agora tem 13 peças\.Desfazer$/.test(x));
+    desfazer33();
+    await pausa(300);
+    ok('Acertar estoque: grava o número digitado ("agora tem 13 peças") e tem Desfazer, que volta ao número de antes', /^Diferença: −1 peça\. Não é venda nem produção: só corrige a contagem\.$/.test(dif) && agora === 13 && !!aviso &&
+      bancoTexto() === antes && noBanco('produtos', 'e3-cabos').estoque === 14 && avisos32().some(x => /^Desfeito: Organizador E3 voltou para 14 peças\./.test(x)), [dif, agora, avisos32().slice(-2)]);
+    const cinza = byId('filamentos', 'e3-cinza').estoqueG;
+    cadAcertar('fil', 'e3-cinza');
+    const chips = $$('#modal .cad-ficha').map(b => b.textContent), novo = () => campoDoForm($('#modal form'), 'novo').value;
+    $$('#modal .cad-ficha').find(b => b.textContent === '½ rolo').click();
+    const meio = novo();
+    $('#modal [aria-label="Mais"]').click();
+    const mais = novo();
+    $$('#modal .cad-ficha').find(b => /carretel/.test(b.textContent)).click();
+    $('#cadB2').value = '230'; $('#cadB1').value = '1.100'; $('#cadB1').dispatchEvent(new Event('input', { bubbles: true }));
+    const pesou = novo(), lembraFil = txt34($('#modal .cad-dif'));
+    ok('Acertar estoque: rolo com atalhos (acabou, ¼, ½, 1 e 2 rolos), mais e menos e "pesei com o carretel" (desconta o carretel vazio)', chips.join('|') === 'acabou|¼ de rolo|½ rolo|1 rolo|2 rolos|pesei com o carretel' &&
+      meio === '500' && mais === '550' && pesou === '870' && txt34($('#cadB3')) === '870 g' && txt34($('#modal .cad-cab')) === 'PLA Cinza E3no sistema: ' + gramas(cinza), [chips, meio, mais, pesou, txt34($('#modal .cad-cab'))]);
+    if (FORM) FORM.sujo = false; fecharModal();
+    cadAcertar('ins', 'e3-etq');
+    const lembraIns = txt34($('#modal .cad-dif'));
+    if (FORM) FORM.sujo = false; fecharModal();
+    ok('Acertar estoque: a janela lembra que perdeu na impressão é Falhou e chegou rolo é Comprei (no insumo, Repor)',
+      lembraFil === `Diferença: −${gramas(cinza - 870)}. Só corrige a contagem. Perdeu numa impressão? Use Falhou. Chegou rolo? Use Comprei.`.replace(/\s+/g, ' ') &&
+      /^Só corrige a contagem\. Chegou mais\? Use Repor\.$/.test(lembraIns), [lembraFil, lembraIns]);
+    cadAcertar('prod', 'e3-cabos');                                   // as duas janelas abrem com 14
+    outroPC([{ n: 91, ops: [{ c: 'produtos', i: 'e3-cabos', t: 'mudar', p: [{ e: { estoque: 14 }, s: { estoque: 13 } }] }] }]);   // o outro grava 13; este ainda não sabe
+    campoDoForm($('#modal form'), 'novo').value = '12';
+    limparAvisos();
+    $('#modal form').requestSubmit();
+    await pausa(400);
+    ok('Acertar estoque: dois ajustes ao mesmo tempo nos dois aparelhos (13 e 12): o segundo é recusado com aviso (a proteção da versão 16)', noBanco('produtos', 'e3-cabos').estoque === 13 &&
+      byId('produtos', 'e3-cabos').estoque === 13 && avisos32().some(x => /^Outro aparelho mudou o produto “Organizador E3” pouco antes\. Esta alteração não foi gravada/.test(x)) && !$$('#toasts .toast.com-acao').length,
+      [noBanco('produtos', 'e3-cabos').estoque, avisos32()]);
+    cadAcertar('prod', 'e3-cabos');                                   // 13
+    outroPC([{ n: 92, ops: [{ c: 'produtos', i: 'e3-cabos', t: 'mudar', p: [{ a: { estoque: -1 } }] }] }]);   // o outro vendeu 1, e chega aqui
+    await carregarTudo(true);
+    campoDoForm($('#modal form'), 'novo').value = '10';
+    limparAvisos();
+    $('#modal form').requestSubmit();
+    await pausa(300);
+    ok('Acertar estoque: o estoque mudou no outro aparelho com a janela aberta (e chegou aqui): nada é gravado e o aviso explica', noBanco('produtos', 'e3-cabos').estoque === 12 && !$('#modal.open') &&
+      avisos32().some(x => /^Outro aparelho mudou o estoque de Organizador E3 enquanto esta janela estava aberta \(agora: 12 peças\)\. Nada foi gravado/.test(x)), [noBanco('produtos', 'e3-cabos').estoque, avisos32()]);
+    cadAcertar('prod', 'e3-cabos');                                   // 12
+    campoDoForm($('#modal form'), 'novo').value = '15';
+    $('#modal form').requestSubmit();
+    await pausa(300);
+    outroPC([{ n: 93, ops: [{ c: 'produtos', i: 'e3-cabos', t: 'mudar', p: [{ a: { estoque: -2 } }] }] }]);   // o outro vendeu 2, e chega aqui
+    await carregarTudo(true);
+    tiraAvisos34();
+    desfazer33();
+    await pausa(300);
+    const aqui = noBanco('produtos', 'e3-cabos').estoque === 13 && avisos32().some(x => /Isto já mudou depois\. Nada foi desfeito\./.test(x));
+    cadAcertar('prod', 'e3-cabos');                                   // 13
+    campoDoForm($('#modal form'), 'novo').value = '11';
+    $('#modal form').requestSubmit();
+    await pausa(300);
+    outroPC([{ n: 94, ops: [{ c: 'produtos', i: 'e3-cabos', t: 'mudar', p: [{ a: { estoque: -1 } }] }] }]);   // o outro vendeu 1; este ainda não sabe
+    tiraAvisos34();
+    desfazer33();
+    await pausa(400);
+    ok('Acertar estoque: o Desfazer não volta o número se o estoque mudou depois (aqui ou só no banco)', aqui && noBanco('produtos', 'e3-cabos').estoque === 10 && byId('produtos', 'e3-cabos').estoque === 10 &&
+      avisos32().some(x => /^Outro aparelho mudou o produto “Organizador E3” pouco antes\. Esta alteração não foi gravada/.test(x)), [aqui, noBanco('produtos', 'e3-cabos').estoque, avisos32()]);
+  });
+  await tenta(['Filamentos, Insumos e Peças prontas: o estoque fica logo depois do nome e o próprio número abre o Acertar estoque; a linha tem Acertar e Comprei ou Repor (Chegou quando foi pedido)'], async () => {
+    marcarPedido('filamentos', 'e3-verde', 'Ana');
+    await pausa(200);
+    const fil = dom34(VIEWS.filamentos()), ins = dom34(VIEWS.insumos()), ven = dom34(VIEWS.vendas()), th = d => $$('thead th', d).map(txt34);
+    const num_ = (d, t, id) => { const b = $(`button.cad-num[data-t="${t}"][data-id="${id}"]`, d); return !!b && b.getAttribute('onclick') === 'cadAcertar(this.dataset.t, this.dataset.id)' && b.closest('td') === b.closest('tr').children[1]; };
+    const bt = (d, id, rot) => !!$$(`tr button[data-id="${id}"]`, d).find(b => b.textContent.trim() === rot);
+    const r = { fil: th(fil)[1] === 'Estoque' && num_(fil, 'fil', 'e3-cinza') && bt(fil, 'e3-cinza', 'Comprei') && bt(fil, 'e3-cinza', 'Acertar') && bt(fil, 'e3-verde', 'Chegou') && /pedido hoje por Ana/.test(txt34($$('tr', fil).find(x => /PLA Verde E3/.test(x.textContent)))),
+      ins: th(ins)[1] === 'Estoque' && num_(ins, 'ins', 'e3-etq') && bt(ins, 'e3-etq', 'Repor') && bt(ins, 'e3-etq', 'Acertar') && txt34($('button.cad-num[data-id="e3-etq"]', ins)) === '410 un',
+      ven: num_(ven, 'prod', 'e3-cabos') && bt(ven, 'e3-cabos', 'Acertar') && bt(ven, 'e3-cabos', 'Vender') };
+    tirarPedido('filamentos', 'e3-verde');
+    ok('Filamentos, Insumos e Peças prontas: o estoque fica logo depois do nome e o próprio número abre o Acertar estoque; a linha tem Acertar e Comprei ou Repor (Chegou quando foi pedido)', Object.values(r).every(Boolean), r);
+  });
+  window.confirm = confirmarDeVerdade;
+  localStorage.removeItem('nexos-carretel');
+  await carregarTudo();
+
+  // 34b. versão 19, correções da revisão da etapa 3: o valor preenchido acompanha o peso (e a quantidade); o dobro, a metade e o zero
+  // também avisam; a compra errada confirmada não vira o valor da próxima; a reposição antiga de outro insumo com nome parecido não
+  // vale; o Desfazer do Já pedi, do Marcar tudo e o Não veio conferem a marca no banco; o Desfazer do Não veio não volta depois da
+  // compra; Chegou tudo pula o que o outro aparelho registrou e pergunta antes de gravar; Chegou com a tela parada pergunta; Chegou
+  // tudo abre só o que está em A caminho; Marcar tudo com um item excluído; "falta chegar"; A caminho com Ver mais; Acertar no fim
+  // da linha. Banco limpo; o "outro PC" grava direto no banco local (outroPC), como nas seções 31 a 34.
+  for (let i = 0; i < 40 && temPendencias(); i++) await pausa(100);
+  localStorage.removeItem(DEMO_KEY); await carregarTudo(); ir('painel'); render();
+  limparAvisos();
+  window.confirm = () => true;
+  {
+    const dias = n => addDias(hoje(), -n);
+    const fecha34b = () => { if ($('#modal.open')) { if (FORM) FORM.sujo = false; fecharModal(); } };
+    put('fornecedores', { id: 'r3-fo', nome: 'Voolt R3', contato: '', obs: '' });
+    const filR3 = (id, nome, precoKg, estoqueG) => put('filamentos', { id, nome, tipo: 'PLA', cor: '#222222', precoKg, estoqueG });
+    const compR3 = (id, f, g, v, dd) => put('compras', { id, data: dias(dd), filamentoId: f, fornecedorId: 'r3-fo', pesoG: g, valor: v, precoKg: v / (g / 1000), obs: '', criadoEm: ha(60 * 24 * dd + 30) });
+    filR3('r3-pla', 'PLA Dois Rolos R3', 104, 165); compR3('r3-c1', 'r3-pla', 1000, 104.5, 7);
+    filR3('r3-zero', 'PLA Zero R3', 100, 500); compR3('r3-c2', 'r3-zero', 1000, 100, 9);
+    filR3('r3-erro', 'PLA Erro R3', 104, 165); compR3('r3-c3', 'r3-erro', 1000, 104.5, 8);
+    const insR3 = (id, nome, custo, estoque, minimo) => put('insumos', { id, nome, unidade: 'un', custo, estoque, minimo });
+    insR3('r3-arg', 'Argola R3', 2, 5, 10); insR3('r3-cola', 'Cola R3', 1, 10, 0);
+    insR3('r3-ima', 'Ímã R3', 0.75, 12, 0); insR3('r3-ima6', 'Ímã R3 (6x2 mm)', 0.9, 40, 0); insR3('r3-cx', 'Caixa R3', 2, 7, 0); insR3('r3-cxg', 'Caixa R3 (grande)', 2, 3, 0);
+    const lancR3 = (id, dd, descricao, valor, extra = {}) => put('lancamentos', { id, data: dias(dd), tipo: 'gasto', categoria: 'Insumos', descricao, valor, fixo: false, criadoEm: ha(60 * 24 * dd + 30), ...extra });
+    lancR3('r3-l1', 6, 'Reposição: Argola R3 (10 un)', 20, { insumoId: 'r3-arg', qtd: 10 }); lancR3('r3-l2', 6, 'Reposição: Cola R3 (10 un)', 10, { insumoId: 'r3-cola', qtd: 10 });
+    // lançamentos de antes da versão 19 (sem o código do insumo): o do "Ímã R3 (6x2 mm)" é mais novo que o do "Ímã R3"
+    lancR3('r3-l3', 20, 'Reposição: Ímã R3 (20 un)', 30); lancR3('r3-l4', 3, 'Reposição: Ímã R3 (6x2 mm) (100 un)', 90);
+    lancR3('r3-l5', 10, 'Reposição: Caixa R3 (50 un)', 100); lancR3('r3-l6', 2, 'Reposição: Caixa R3 (grande) (30 un)', 60);
+    // o outro aparelho: marca o "Já pedi" (com o número da marca) ou registra a chegada de 1 kg (a marca sai e o estoque soma)
+    const marcaOutro = (n, col, id, por, em) => outroPC([{ n, ops: [{ c: col, i: id, t: 'mudar', p: [{ s: { pedidoEm: em || new Date(Date.now() + 1000).toISOString(), pedidoPor: por, pedidoN: n } }] }] }]);
+    const chegadaOutro = (n, id, cod, valor = 100) => outroPC([{ n, ops: [{ c: 'filamentos', i: id, t: 'mudar', p: [{ m: [{ p: 'precoKg', q: 'estoqueG', n: 1000, v: valor, e: 1000, k: 2 }], x: ['pedidoEm', 'pedidoPor', 'pedidoN'], a: { estoqueG: 1000 } }] },
+      { c: 'compras', i: cod, t: 'novo', d: { data: hoje(), filamentoId: id, fornecedorId: 'r3-fo', pesoG: 1000, valor, precoKg: valor, obs: '', criadoEm: agoraISO() } }] }]);
+    const semMarcas = () => [...S.filamentos.filter(r => r.pedidoEm).map(r => ['filamentos', r.id]), ...S.insumos.filter(r => r.pedidoEm).map(r => ['insumos', r.id])].forEach(([c, id]) => tirarPedido(c, id));
+    await pausa(300); await assenta34();
+
+    await tenta(['Comprei preenchido: mudar só o peso (2 rolos) faz o valor acompanhar pelo preço da última (R$ 209,00, "pelo preço da última"), e o preço médio não cai para a metade',
+      'Repor preenchido: mudar só a quantidade (20 no lugar de 10) faz o valor acompanhar (R$ 40,00), e o custo médio fica o mesmo',
+      'Comprei preenchido: o valor que a pessoa digitou não muda com o peso'], async () => {
+      cadComprei('fil', 'r3-pla');
+      const f = $('#modal form'), peso = campoDoForm(f, 'pesoG'), v = campoDoForm(f, 'valor');
+      peso.value = '2000'; peso.dispatchEvent(new Event('input', { bubbles: true }));
+      const valor = v.value, dica = dica34(v), tracejado = v.classList.contains('cad-igual');
+      f.requestSubmit();
+      await pausa(300);
+      const c = linhas32(d => d.filamentoId === 'r3-pla' && /^cp-/.test(d.id)).map(l => l.d)[0] || {}, pm = (noBanco('filamentos', 'r3-pla') || {}).precoKg;
+      ok('Comprei preenchido: mudar só o peso (2 rolos) faz o valor acompanhar pelo preço da última (R$ 209,00, "pelo preço da última"), e o preço médio não cai para a metade',
+        valor === '209,00' && /^Pelo preço da última: R\$\s104,50 o kg \(\d\d\/\d\d\)/.test(dica) && tracejado && !$('#modal.open') && c.pesoG === 2000 && c.valor === 209 &&
+        pm === arred((165 / 1000 * 104 + 209) / (2165 / 1000), 2), { valor, dica, tracejado, c, pm });
+      cadComprei('ins', 'r3-arg');
+      const fi = $('#modal form'), q = campoDoForm(fi, 'qtd'), vi = campoDoForm(fi, 'valor'), q0 = q.value, v0 = vi.value;
+      q.value = '20'; q.dispatchEvent(new Event('input', { bubbles: true }));
+      const vi1 = vi.value, dicaI = dica34(vi);
+      fi.requestSubmit();
+      await pausa(300);
+      const l = linhas32(d => d.categoria === 'Insumos' && d.insumoId === 'r3-arg' && /^rp-/.test(d.id)).map(x => x.d)[0] || {}, ins = noBanco('insumos', 'r3-arg') || {};
+      ok('Repor preenchido: mudar só a quantidade (20 no lugar de 10) faz o valor acompanhar (R$ 40,00), e o custo médio fica o mesmo', q0 === '10' && v0 === '20,00' && vi1 === '40,00' &&
+        /^Pelo preço da última: R\$\s2,00 por un \(\d\d\/\d\d\)/.test(dicaI) && l.qtd === 20 && l.valor === 40 && ins.custo === 2 && ins.estoque === 25, { q0, v0, vi1, dicaI, l, ins });
+      cadComprei('fil', 'r3-erro');
+      const f3 = $('#modal form'), v3 = campoDoForm(f3, 'valor'), p3 = campoDoForm(f3, 'pesoG');
+      v3.value = '150'; v3.dispatchEvent(new Event('input', { bubbles: true }));
+      p3.value = '2000'; p3.dispatchEvent(new Event('input', { bubbles: true }));
+      ok('Comprei preenchido: o valor que a pessoa digitou não muda com o peso', v3.value === '150' && /^Última: R\$\s104,50/.test(dica34(v3)) && !v3.classList.contains('cad-igual'), [v3.value, dica34(v3)]);
+      fecha34b();
+    });
+    await tenta(['Valor fora do comum: o dobro e a metade exatos do preço médio também aparecem em vermelho',
+      'Valor fora do comum: a compra sem custo (R$ 0,00) com preço médio também avisa em vermelho e pergunta antes de gravar (nada é gravado até a resposta)'], async () => {
+      cadComprei('fil', 'r3-zero');                                      // preço médio R$ 100,00 por kg; a última foi 1 kg por R$ 100,00
+      const conf = v => { setCampo('valor', v); return txt34($('#modal .cad-conf')); };
+      const dobro = conf(200), metade = conf(50), perto = conf(150), zero = conf(0);
+      ok('Valor fora do comum: o dobro e a metade exatos do preço médio também aparecem em vermelho', /^Confira o valor\. R\$\s200,00 por kg é 2 vezes o preço médio \(R\$\s100,00\)\.$/.test(dobro) &&
+        /^Confira o valor\. R\$\s50,00 por kg é 50% do preço médio \(R\$\s100,00\)\.$/.test(metade) && perto === '', { dobro, metade, perto });
+      const antes = bancoTexto();
+      $('#modal form').requestSubmit();
+      await pausa(150);
+      const pq = pergunta33(), bs = $$('#modal .pergunta-botoes .btn');
+      ok('Valor fora do comum: a compra sem custo (R$ 0,00) com preço médio também avisa em vermelho e pergunta antes de gravar (nada é gravado até a resposta)',
+        /^Confira o valor\. R\$\s0,00 por kg \(sem custo\) faz o preço médio cair \(R\$\s100,00\)\.$/.test(zero) && !!pq && pq.titulo === 'Confira o valor' &&
+        /^PLA Zero R3 sem custo \(R\$\s0,00\) faz o preço médio cair \(R\$\s100,00 por kg\)\. O valor está certo\?$/.test(pq.texto) && document.activeElement === bs[1] && bancoTexto() === antes, { zero, pq });
+      fecha34b();
+    });
+    await tenta(['Comprei: a compra errada confirmada em "Registrar assim mesmo" não vira o valor da próxima (vem em branco, com o aviso "ficou fora do comum")',
+      'Repor: a reposição errada confirmada assim mesmo também não vira o valor da próxima (o lançamento guarda o custo médio de antes)'], async () => {
+      await assenta34();
+      cadComprei('fil', 'r3-erro');
+      setCampo('valor', 1045);
+      $('#modal form').requestSubmit();
+      await pausa(150);
+      resposta33('Registrar assim mesmo');
+      await pausa(300);
+      const c = linhas32(d => d.filamentoId === 'r3-erro' && d.valor === 1045).length;
+      cadComprei('fil', 'r3-erro');
+      const v = campoDoForm($('#modal form'), 'valor'), dica = dica34(v);
+      ok('Comprei: a compra errada confirmada em "Registrar assim mesmo" não vira o valor da próxima (vem em branco, com o aviso "ficou fora do comum")', c === 1 && v.value === '' &&
+        /^A última \(R\$\s1\.045,00, \d\d\/\d\d\) ficou fora do comum: digite o valor/.test(dica) && !v.classList.contains('cad-igual') && document.activeElement === v, { c, valor: v.value, dica });
+      fecha34b();
+      cadComprei('ins', 'r3-cola');                                     // custo R$ 1,00; a última foi 10 un por R$ 10,00
+      setCampo('valor', 100);
+      $('#modal form').requestSubmit();
+      await pausa(150);
+      resposta33('Registrar assim mesmo');
+      await pausa(300);
+      const l = linhas32(d => d.insumoId === 'r3-cola' && d.valor === 100).map(x => x.d)[0] || {};
+      cadComprei('ins', 'r3-cola');
+      const vi = campoDoForm($('#modal form'), 'valor'), dicaI = dica34(vi);
+      ok('Repor: a reposição errada confirmada assim mesmo também não vira o valor da próxima (o lançamento guarda o custo médio de antes)', l.custoAntes === 1 && vi.value === '' &&
+        /^A última \(R\$\s100,00, \d\d\/\d\d\) ficou fora do comum: digite o valor/.test(dicaI), { l, valor: vi.value, dicaI });
+      fecha34b();
+    });
+    await tenta(['Repor: o lançamento de antes da versão 19 de outro insumo cujo nome começa igual ("Ímã R3 (6x2 mm)") não vira a última reposição do "Ímã R3" (a descrição inteira precisa bater)'], async () => {
+      const r = ['r3-ima', 'r3-ima6', 'r3-cx', 'r3-cxg'].map(id => { const u = ultimaReposicao(byId('insumos', id)); return u ? u.qtd + '/' + u.valor : '-'; }).join(' ');
+      ok('Repor: o lançamento de antes da versão 19 de outro insumo cujo nome começa igual ("Ímã R3 (6x2 mm)") não vira a última reposição do "Ímã R3" (a descrição inteira precisa bater)', r === '20/30 100/90 50/100 30/60', r);
+    });
+    await tenta(['Já pedi: o Desfazer não apaga a marca que o outro aparelho pôs por cima no banco antes de o aviso dela chegar aqui (o banco confere o número da marca)',
+      'Marcar tudo: o Desfazer tira as marcas deste aparelho e deixa a que o outro pôs por cima no banco (o aviso conta as duas coisas)',
+      'Não veio: não tira a marca que o outro aparelho pôs de novo no banco (o aviso ainda não tinha chegado aqui)'], async () => {
+      await assenta34(); limparAvisos();
+      cadPedi('fil', 'r3-zero');
+      await pausa(300); await assenta34();
+      marcaOutro(201, 'filamentos', 'r3-zero', 'Bruno');                // este aparelho ainda não sabe
+      desfazer33();
+      await pausa(400); await assenta34();
+      const b = noBanco('filamentos', 'r3-zero') || {}, t = byId('filamentos', 'r3-zero') || {};
+      ok('Já pedi: o Desfazer não apaga a marca que o outro aparelho pôs por cima no banco antes de o aviso dela chegar aqui (o banco confere o número da marca)', b.pedidoPor === 'Bruno' && b.pedidoN === 201 &&
+        t.pedidoPor === 'Bruno' && avisos32().some(x => /^PLA Zero R3 continua a caminho: Bruno marcou como pedido pouco antes\. Nada foi desfeito\./.test(x)), { b, t: [t.pedidoEm, t.pedidoPor], avisos: avisos32() });
+      limparAvisos();
+      cadMarcarTudo([{ t: 'fil', id: 'r3-pla' }, { t: 'fil', id: 'r3-erro' }, { t: 'ins', id: 'r3-arg' }]);
+      await pausa(300); await assenta34();
+      marcaOutro(202, 'filamentos', 'r3-erro', 'Bruno');                // este aparelho ainda não sabe
+      desfazer33();
+      await pausa(500); await assenta34();
+      const m = [noBanco('filamentos', 'r3-pla'), noBanco('filamentos', 'r3-erro'), noBanco('insumos', 'r3-arg')].map(r => (r || {}).pedidoPor || '-').join();
+      ok('Marcar tudo: o Desfazer tira as marcas deste aparelho e deixa a que o outro pôs por cima no banco (o aviso conta as duas coisas)', m === '-,Bruno,-' &&
+        avisos32().some(x => /^Desfeito: 2 itens voltaram para a lista do que comprar\. PLA Erro R3 continua a caminho: Bruno marcou como pedido pouco antes\./.test(x)), { m, avisos: avisos32() });
+      limparAvisos();
+      marcaOutro(203, 'filamentos', 'r3-pla', 'Sócio', ha(60 * 48));
+      await carregarTudo(true);
+      marcaOutro(204, 'filamentos', 'r3-pla', 'Bruno');                 // este aparelho ainda não sabe
+      cadNaoVeio('fil', 'r3-pla');
+      await pausa(400); await assenta34();
+      const nv = noBanco('filamentos', 'r3-pla') || {};
+      ok('Não veio: não tira a marca que o outro aparelho pôs de novo no banco (o aviso ainda não tinha chegado aqui)', nv.pedidoPor === 'Bruno' && nv.pedidoN === 204 &&
+        avisos32().some(x => /^PLA Dois Rolos R3 continua a caminho: Bruno marcou como pedido pouco antes\.✕$/.test(x)), { nv, avisos: avisos32() });
+    });
+    await tenta(['Não veio: o Desfazer não devolve a marca se a compra do item já entrou e chegou a este aparelho',
+      'Não veio: o Desfazer não devolve a marca se a compra do item entrou no banco e ainda não chegou aqui (o banco confere o estoque)'], async () => {
+      await assenta34(); limparAvisos();
+      marcaOutro(211, 'filamentos', 'r3-zero', 'Sócio', ha(60 * 48));
+      await carregarTudo(true);
+      cadNaoVeio('fil', 'r3-zero');
+      await pausa(300); await assenta34();
+      chegadaOutro(212, 'r3-zero', 'r3-outro-c1');
+      await carregarTudo(true);
+      desfazer33();
+      await pausa(300); await assenta34();
+      const a = noBanco('filamentos', 'r3-zero') || {};
+      ok('Não veio: o Desfazer não devolve a marca se a compra do item já entrou e chegou a este aparelho', !a.pedidoEm && !byId('filamentos', 'r3-zero').pedidoEm && avisos32().some(x => /^Isto já mudou depois\. Nada foi desfeito\./.test(x)), { a, avisos: avisos32() });
+      limparAvisos();
+      marcaOutro(213, 'filamentos', 'r3-zero', 'Sócio', ha(60 * 48));
+      await carregarTudo(true);
+      cadNaoVeio('fil', 'r3-zero');
+      await pausa(300); await assenta34();
+      chegadaOutro(214, 'r3-zero', 'r3-outro-c2');                      // este aparelho ainda não sabe
+      desfazer33();
+      await pausa(400); await assenta34();
+      const b = noBanco('filamentos', 'r3-zero') || {};
+      ok('Não veio: o Desfazer não devolve a marca se a compra do item entrou no banco e ainda não chegou aqui (o banco confere o estoque)', !b.pedidoEm && b.estoqueG === 2500 &&
+        avisos32().some(x => /^Isto já mudou no outro aparelho: PLA Zero R3 não voltou para A caminho\./.test(x)), { b, avisos: avisos32() });
+    });
+    await tenta(['Chegou tudo: o que o outro aparelho registrou depois do toque fica de fora, com aviso (a compra dele não abre de novo)',
+      'Chegou tudo: a chegada registrada no outro aparelho com a janela aberta pergunta antes de gravar, com o cursor em "Não registrar" (nada entra em dobro)'], async () => {
+      await assenta34(); limparAvisos(); fecha34b();
+      semMarcas();
+      ['r3-ch1', 'r3-ch2', 'r3-ch3'].forEach((id, k) => { filR3(id, 'PLA Chegou ' + (k + 1) + ' R3', 100, 50 + k * 10); compR3(id + '-c0', id, 1000, 100, 12); });
+      await pausa(300); await assenta34();
+      ['r3-ch1', 'r3-ch2', 'r3-ch3'].forEach((id, k) => marcaOutro(221 + k, 'filamentos', id, 'Sócio', ha(60 * 50)));
+      await carregarTudo(true);
+      ir('compras'); render(); await pausa(200);
+      const fila0 = materiaisParaComprar().caminho.map(m => m.id).join();
+      cadChegouTudo();
+      const j1 = txt34($('#modal.open h3')), f1 = (campoDoForm($('#modal form'), 'filamentoId') || {}).value;
+      chegadaOutro(231, 'r3-ch2', 'r3-ch2-outro');                       // o outro registra a chegada do 2º, e o aviso chega aqui
+      await carregarTudo(true);
+      $('#modal form').requestSubmit();
+      await pausa(150);
+      const j2 = txt34($('#modal.open h3')), f2 = (campoDoForm($('#modal form'), 'filamentoId') || {}).value, compras2 = linhas32(d => d.filamentoId === 'r3-ch2').length;
+      ok('Chegou tudo: o que o outro aparelho registrou depois do toque fica de fora, com aviso (a compra dele não abre de novo)', fila0 === 'r3-ch1,r3-ch2,r3-ch3' && j1 === 'Registrar compra de filamento (1 de 3)' &&
+        f1 === 'r3-ch1' && j2 === 'Registrar compra de filamento (3 de 3)' && f2 === 'r3-ch3' && compras2 === 2 &&
+        avisos32().some(x => /^Outro aparelho já registrou a chegada de PLA Chegou 2 R3 \(1 kg, R\$\s100,00\)\. Esta compra ficou de fora, para não entrar em dobro\./.test(x)), { fila0, j1, f1, j2, f2, compras2, avisos: avisos32() });
+      chegadaOutro(232, 'r3-ch3', 'r3-ch3-outro', 95);                    // com a janela do 3º aberta
+      await carregarTudo(true);
+      await pausa(850);
+      const antes = bancoTexto();
+      $('#modal form').requestSubmit();
+      await pausa(150);
+      const pq = pergunta33(), ativo = document.activeElement && document.activeElement.textContent;
+      resposta33('Não registrar');
+      await pausa(300);
+      ok('Chegou tudo: a chegada registrada no outro aparelho com a janela aberta pergunta antes de gravar, com o cursor em "Não registrar" (nada entra em dobro)', !!pq && pq.titulo === 'Confira a chegada' &&
+        /^Outro aparelho já registrou a chegada de PLA Chegou 3 R3 \(1 kg, R\$\s95,00\)\. Registrar outra compra\?$/.test(pq.texto) && pq.botoes.join('|') === 'Registrar outra|Não registrar' &&
+        ativo === 'Não registrar' && bancoTexto() === antes && !$('#modal.open') && linhas32(d => d.filamentoId === 'r3-ch3').length === 2, { pq, ativo, n: linhas32(d => d.filamentoId === 'r3-ch3').length });
+    });
+    await tenta(['Chegou com a tela parada: o item que o outro aparelho já registrou não abre a compra sem perguntar (o cursor em "Não registrar")'], async () => {
+      await assenta34(); limparAvisos(); fecha34b();
+      filR3('r3-par', 'PLA Parado R3', 100, 40); compR3('r3-par-c0', 'r3-par', 1000, 100, 12);
+      await pausa(300); await assenta34();
+      marcaOutro(241, 'filamentos', 'r3-par', 'Sócio', ha(60 * 50));
+      await carregarTudo(true);
+      ir('compras'); render(); await pausa(200);
+      const bt = $$('#cad-comprar li button').find(b => b.textContent.trim() === 'Chegou' && b.dataset.id === 'r3-par');
+      chegadaOutro(242, 'r3-par', 'r3-par-outro');                       // a tela daqui ainda não redesenhou: o botão continua ali
+      await carregarTudo(true);
+      const antes = linhas32(d => d.filamentoId === 'r3-par').length;
+      if (bt) bt.click();
+      await pausa(150);
+      const pq = pergunta33(), form = !!$('#modal form'), ativo = document.activeElement && document.activeElement.textContent;
+      if (pq) resposta33('Não registrar');
+      await pausa(200);
+      ok('Chegou com a tela parada: o item que o outro aparelho já registrou não abre a compra sem perguntar (o cursor em "Não registrar")', !!bt && !!pq && pq.titulo === 'Confira a chegada' &&
+        /^Outro aparelho já registrou a chegada de PLA Parado R3 \(1 kg, R\$\s100,00\)\. Registrar outra compra\?$/.test(pq.texto) && !form && ativo === 'Não registrar' && !$('#modal.open') &&
+        linhas32(d => d.filamentoId === 'r3-par').length === antes, { bt: !!bt, pq, form, ativo });
+    });
+    await tenta(['Chegou tudo abre só o que está em A caminho na tela: a linha marcada agora há pouco (no alto da lista, com desfazer) fica de fora'], async () => {
+      await assenta34(); limparAvisos(); fecha34b();
+      semMarcas();
+      ['r3-cj1', 'r3-cj2', 'r3-cj3'].forEach((id, k) => { filR3(id, 'PLA Junto ' + (k + 1) + ' R3', 100, 30 + k); compR3(id + '-c0', id, 1000, 100, 12); });
+      await pausa(300); await assenta34();
+      marcaOutro(251, 'filamentos', 'r3-cj1', 'Sócio', ha(60 * 50)); marcaOutro(252, 'filamentos', 'r3-cj2', 'Sócio', ha(60 * 50));
+      await carregarTudo(true);
+      ir('painel'); render(); await pausa(200);
+      cadPedi('fil', 'r3-cj3');
+      await pausa(300);
+      const caminhoNaTela = $$('#op-material .cad-grupo + .op-lista li', dom34(VIEWS.painel())).length;
+      cadChegouTudo();
+      const j = txt34($('#modal.open h3')), f = (campoDoForm($('#modal form'), 'filamentoId') || {}).value, resto = cadFilaChegou.map(x => x.id);
+      ok('Chegou tudo abre só o que está em A caminho na tela: a linha marcada agora há pouco (no alto da lista, com desfazer) fica de fora', caminhoNaTela === 2 && j === 'Registrar compra de filamento (1 de 2)' &&
+        ['r3-cj1', 'r3-cj2'].includes(f) && resto.length === 1 && !resto.includes('r3-cj3'), { caminhoNaTela, j, f, resto });
+      fecha34b(); cadFilaChegou = [];
+    });
+    await tenta(['Marcar tudo: um item que o outro aparelho excluiu (o aviso ainda não chegou) fica de fora sozinho: os outros ficam marcados, e o aviso diz isso'], async () => {
+      await assenta34(); limparAvisos(); fecha34b();
+      filR3('r3-mt1', 'PLA Marcar 1 R3', 100, 20); filR3('r3-mt2', 'PLA Marcar 2 R3', 100, 21); insR3('r3-mt3', 'Fita Marcar R3', 1, 1, 5);
+      await pausa(300); await assenta34();
+      outroPC([{ n: 261, ops: [{ c: 'filamentos', i: 'r3-mt2', t: 'apagar', p: [] }] }]);   // este aparelho ainda não sabe
+      cadMarcarTudo([{ t: 'fil', id: 'r3-mt1' }, { t: 'fil', id: 'r3-mt2' }, { t: 'ins', id: 'r3-mt3' }]);
+      await pausa(500); await assenta34();
+      const m = [noBanco('filamentos', 'r3-mt1'), noBanco('insumos', 'r3-mt3')].map(r => (r || {}).pedidoPor || '-').join();
+      ok('Marcar tudo: um item que o outro aparelho excluiu (o aviso ainda não chegou) fica de fora sozinho: os outros ficam marcados, e o aviso diz isso', m === 'você,você' && !noBanco('filamentos', 'r3-mt2') &&
+        avisos32().some(x => /^2 itens marcados como pedido\. PLA Marcar 2 R3 ficou de fora: outro aparelho excluiu pouco antes\.Desfazer$/.test(x)), { m, avisos: avisos32() });
+    });
+    await tenta(['O que comprar: com tudo já pedido, a lista diz que falta chegar (sem o visto de "tem material para a fila inteira")',
+      'Painel: A caminho mostra os primeiros 5 e "Ver mais" (em Compras, todos)'], async () => {
+      await assenta34(); limparAvisos(); fecha34b();
+      for (let k = 1; k <= 7; k++) filR3('r3-v' + k, 'PLA Vários ' + k + ' R3', 100, 10 + k);
+      await pausa(300); await assenta34();
+      cadMarcarTudo(materiaisParaComprar().comprar.slice());
+      await pausa(300); await assenta34();
+      location.hash = 'compras'; await pausa(200); location.hash = 'painel'; await pausa(200);
+      const s = $('#op-material', dom34(VIEWS.painel())), certo = s && $('.op-certo', s), n = materiaisParaComprar().caminho.length;
+      ok('O que comprar: com tudo já pedido, a lista diz que falta chegar (sem o visto de "tem material para a fila inteira")', materiaisParaComprar().comprar.length === 0 && n > 0 && !!certo && !$('.op-i', certo) &&
+        txt34(certo) === 'Tudo já foi pedido. Falta chegar o que está em A caminho.', { certo: certo && txt34(certo), n });
+      const linhasP = s ? $$('.cad-grupo + .op-lista li', s).length : 0, verMais = s && $$('.cad-grupo button', s).find(b => b.getAttribute('onclick') === "opAlternarLista('caminho')");
+      const linhasC = $$('#cad-comprar .cad-grupo + .op-lista li', dom34(VIEWS.compras())).length;
+      opListaAberta.caminho = true; const abertas = $$('#op-material .cad-grupo + .op-lista li', dom34(VIEWS.painel())).length; opListaAberta.caminho = false;
+      ok('Painel: A caminho mostra os primeiros 5 e "Ver mais" (em Compras, todos)', n >= 7 && linhasP === 5 && !!verMais && txt34(verMais) === 'Ver mais ' + (n - 5) && linhasC === n && abertas === n, { n, linhasP, linhasC, abertas, verMais: verMais && txt34(verMais) });
+    });
+    await tenta(['Filamentos, Insumos e Peças prontas: Acertar vem no fim da linha (Comprei, Editar, Excluir e o Vender continuam onde estavam na versão 18)',
+      'Filamentos e Insumos: o Chegou da linha leva a marca vista na tela, e "pedido há N dias por ..." pode quebrar a linha na coluna do nome'], async () => {
+      put('produtos', { id: 'r3-peca', nome: 'Peça R3', materiais: [], insumos: [], horas: 1, estoque: 4, precos: { direta: 10 } });
+      await pausa(200);
+      const fil = dom34(VIEWS.filamentos()), ins = dom34(VIEWS.insumos()), ven = dom34(VIEWS.vendas());
+      const comAcertar = d => $$('tr', d).filter(tr => $$('button', tr).some(b => b.textContent.trim() === 'Acertar'));
+      const rotulos = tr => $$('.rowbtns button', tr).map(b => b.textContent.trim());
+      const fimDaLinha = d => comAcertar(d).length > 0 && comAcertar(d).every(tr => { const r = rotulos(tr); return r[r.length - 1] === 'Acertar' && $$('.rowbtns button', tr).pop().classList.contains('cad-acertar'); });
+      const peca = comAcertar(ven).find(tr => /Peça R3/.test(tr.textContent));
+      const r = { fil: fimDaLinha(fil) && comAcertar(fil).every(tr => rotulos(tr).join(' ').endsWith('Editar Excluir Acertar')), ins: fimDaLinha(ins) && comAcertar(ins).every(tr => rotulos(tr).join(' ').endsWith('Editar Excluir Acertar')),
+        ven: fimDaLinha(ven) && !!peca && rotulos(peca).join(' ') === 'Vender Acertar' };
+      ok('Filamentos, Insumos e Peças prontas: Acertar vem no fim da linha (Comprei, Editar, Excluir e o Vender continuam onde estavam na versão 18)', Object.values(r).every(Boolean), { r, peca: peca && rotulos(peca) });
+      const marcado = S.filamentos.find(f => f.pedidoEm), linha = marcado && $$('tr', fil).find(tr => tr.querySelector(`button[data-id="${marcado.id}"]`)), ch = linha && $$('button', linha).find(b => b.textContent.trim() === 'Chegou');
+      const insM = S.insumos.find(i => i.pedidoEm), linhaI = insM && $$('tr', ins).find(tr => tr.querySelector(`button[data-id="${insM.id}"]`)), chI = linhaI && $$('button', linhaI).find(b => b.textContent.trim() === 'Chegou');
+      ok('Filamentos e Insumos: o Chegou da linha leva a marca vista na tela, e "pedido há N dias por ..." pode quebrar a linha na coluna do nome', !!ch && ch.dataset.em === marcado.pedidoEm && ch.dataset.t === 'fil' &&
+        ch.getAttribute('onclick') === 'cadComprei(this.dataset.t, this.dataset.id, this.dataset.em)' && !!$('small.cad-pedido', linha) && !!chI && chI.dataset.em === insM.pedidoEm && chI.dataset.t === 'ins' && !!$('small.cad-pedido', linhaI),
+        { ch: ch && ch.outerHTML.slice(0, 300), chI: chI && chI.outerHTML.slice(0, 300) });
+    });
+  }
   window.confirm = confirmarDeVerdade;
   await carregarTudo();
 

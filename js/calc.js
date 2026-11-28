@@ -556,13 +556,17 @@ function pedidoIgualRecente(d) {
 
 /* ---------- Compras de filamento e insumos ---------- */
 /* d: { data, filamentoId, fornecedorId, pesoG, valor (total pago, com frete), obs, id (código fixo, opcional) }.
-   Soma ao estoque e recalcula o preço por kg pela média ponderada com o que já havia. */
+   Soma ao estoque e recalcula o preço por kg pela média ponderada com o que já havia. A compra guarda também o preço médio e
+   o estoque de antes dela e o preço médio que ela deixou (precoAntes, estAntes e precoDepois, como este aparelho via na hora):
+   servem para corrigir depois uma compra lançada errada. Registrar a compra tira a marca do "Já pedi" do filamento. */
 function registrarCompra(d) {
   const f = byId('filamentos', d.filamentoId), g = num(d.pesoG), valor = num(d.valor);
+  const antes = f && g > 0 ? { precoAntes: num(f.precoKg), estAntes: num(f.estoqueG) } : {};
   if (f && g > 0) {
     const est = Math.max(0, num(f.estoqueG));
     f.precoKg = arred((est / 1000 * num(f.precoKg) + valor) / ((est + g) / 1000), 2);
     f.estoqueG = arred(num(f.estoqueG) + g, 2);
+    if (f.pedidoEm || f.pedidoPor || f.pedidoN !== undefined) { delete f.pedidoEm; delete f.pedidoPor; delete f.pedidoN; }
     // no banco, a média é refeita com o estoque de lá (outro aparelho pode ter gasto ou comprado neste instante)
     put('filamentos', f, { media: { p: 'precoKg', q: 'estoqueG', n: g, v: valor, e: 1000, k: 2 } });
   }
@@ -570,6 +574,7 @@ function registrarCompra(d) {
     // id vindo de fora (código fixo): a mesma compra feita nos dois aparelhos entra uma vez só
     id: d.id && ID_OK.test(String(d.id)) ? String(d.id) : uid(), data: d.data || hoje(), filamentoId: d.filamentoId || '', fornecedorId: d.fornecedorId || '',
     pesoG: g, valor, precoKg: g > 0 ? valor / (g / 1000) : 0, obs: d.obs || '', criadoEm: agoraISO(),
+    ...(f && g > 0 ? { ...antes, precoDepois: num(f.precoKg) } : {}),
   });
 }
 /* Tira o peso do estoque; o preço médio do filamento não é recalculado. */
@@ -579,17 +584,117 @@ function excluirCompra(c) {
   rm('compras', c.id);
 }
 /* Repõe um insumo: soma ao estoque, recalcula o custo médio e lança o gasto no financeiro. id (opcional): código fixo do
-   lançamento (a mesma reposição feita nos dois aparelhos entra uma vez só). */
+   lançamento (a mesma reposição feita nos dois aparelhos entra uma vez só). O lançamento guarda também o insumo, a quantidade e o
+   custo médio de antes (insumoId, qtd e custoAntes: a próxima reposição já vem preenchida com esta, a não ser que esta tenha
+   ficado fora do comum). Repor tira a marca do "Já pedi" do insumo. */
 function reporInsumo(i, qtd, valor, data, id) {
   qtd = num(qtd); valor = num(valor);
   if (qtd <= 0) return;
-  const est = Math.max(0, num(i.estoque));
+  const est = Math.max(0, num(i.estoque)), custoAntes = num(i.custo);
   if (valor > 0) i.custo = arred((est * num(i.custo) + valor) / (est + qtd), 4);
   i.estoque = arred(num(i.estoque) + qtd, 3);
+  if (i.pedidoEm || i.pedidoPor || i.pedidoN !== undefined) { delete i.pedidoEm; delete i.pedidoPor; delete i.pedidoN; }
   put('insumos', i, valor > 0 ? { media: { p: 'custo', q: 'estoque', n: qtd, v: valor, e: 1, k: 4 } } : {});
   if (valor > 0) {
-    put('lancamentos', { id: id && ID_OK.test(String(id)) ? String(id) : uid(), data: data || hoje(), tipo: 'gasto', categoria: 'Insumos', descricao: `Reposição: ${i.nome} (${nf(qtd, 2)} ${i.unidade || 'un'})`, valor, fixo: false, criadoEm: agoraISO() });
+    put('lancamentos', { id: id && ID_OK.test(String(id)) ? String(id) : uid(), data: data || hoje(), tipo: 'gasto', categoria: 'Insumos', descricao: `Reposição: ${i.nome} (${nf(qtd, 2)} ${i.unidade || 'un'})`, valor, fixo: false, criadoEm: agoraISO(),
+      insumoId: i.id, qtd, custoAntes });
   }
+}
+/* A mais recente de uma lista (pela data; no empate, a lançada por último), ou null. */
+const maisRecenteDe = lista => lista.reduce((a, b) => (!a || String(b.data || '') > String(a.data || '') ||
+  (String(b.data || '') === String(a.data || '') && String(b.criadoEm || '') > String(a.criadoEm || '')) ? b : a), null);
+/* A última compra de um filamento, ou null. */
+const ultimaCompra = filamentoId => memo('ultima-compra', () => {
+  const m = new Map();
+  S.compras.forEach(c => { if (c.filamentoId) m.set(c.filamentoId, maisRecenteDe([m.get(c.filamentoId), c].filter(Boolean))); });
+  return m;
+}).get(filamentoId) || null;
+const textoEmRegex = s => String(s ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/* A última reposição de um insumo: { qtd, valor, data, id, criadoEm, custoAntes }, lida do lançamento que reporInsumo grava no
+   Financeiro (pelo código do insumo guardado nele; nos de antes da versão 19, pela descrição inteira "Reposição: <nome>
+   (<quantidade> <unidade>)": a de outro insumo cujo nome começa igual, como "Ímã (6x2 mm)" para o "Ímã", não conta), ou null. Só
+   existe quando a reposição teve valor pago: sem valor, nada entra no Financeiro. */
+function ultimaReposicao(i) {
+  if (!i) return null;
+  const exata = new RegExp('^Reposição: ' + textoEmRegex(i.nome) + ' \\(([\\d.,]+) [^()]+\\)$');
+  const l = maisRecenteDe(S.lancamentos.filter(x => x.categoria === 'Insumos' && (x.insumoId ? x.insumoId === i.id : exata.test(String(x.descricao || '')))));
+  if (!l) return null;
+  const qtd = num(l.qtd) > 0 ? num(l.qtd) : num((exata.exec(String(l.descricao || '')) || [])[1]);
+  return qtd > 0 ? { qtd, valor: num(l.valor), data: l.data || '', id: l.id, criadoEm: l.criadoEm || '', custoAntes: l.custoAntes } : null;
+}
+/* Preço fora do comum numa compra: o desta compra (por kg ou por unidade) chega ao dobro do preço médio de hoje ou fica na metade
+   dele ou abaixo (ex.: 1045 digitado no lugar de 104,50; zero, de uma compra sem custo, também). Devolve quantas vezes o preço
+   médio (0 na compra sem custo), ou null (normal, ou sem preço médio para comparar). */
+const precoForaDoComum = (unit, medio) => {
+  const u = num(unit), m = num(medio);
+  return m > 0 && u >= 0 && (u >= m * 2 || u <= m / 2) ? u / m : null;
+};
+/* A compra (reposição) ficou fora do comum quando foi registrada? O preço dela contra o preço médio de antes dela (guardado nela
+   desde a versão 19: precoAntes na compra, custoAntes no lançamento da reposição). Uma compra errada que alguém confirmou assim
+   mesmo não vira o valor já preenchido da próxima. */
+const compraForaDoComum = c => !!c && num(c.precoAntes) > 0 && num(c.pesoG) > 0 && precoForaDoComum(num(c.valor) / (num(c.pesoG) / 1000), c.precoAntes) !== null;
+const reposicaoForaDoComum = u => !!u && num(u.custoAntes) > 0 && num(u.qtd) > 0 && precoForaDoComum(num(u.valor) / num(u.qtd), u.custoAntes) !== null;
+
+/* ---------- O que comprar (só leitura: nenhuma conta de custo ou de estoque muda) ----------
+   Cada filamento e insumo com o que tem, o que a fila inteira ainda vai usar e o que falta para ela. A falta é a soma do que
+   falta ordem por ordem (materialDaFila: a mesma conta da coluna Filamento da fila). Níveis: 'falta' (a fila precisa de mais do
+   que há), 'acabou', 'acabando' (no limite do aviso de hoje: o alerta de estoque dos filamentos, 200 g por padrão, e o mínimo de
+   cada insumo), 'vai' (tem, mas depois da fila fica no limite) e 'ok'. O alerta e o mínimo continuam os de alertas(): a fila só
+   entra na conta que é mostrada. pedido: a marca do "Já pedi" ({ em, por }) ou null. primeira: a posição na fila da primeira
+   ordem que fica sem o material (o que falta antes é o mais urgente). */
+const NIVEL_MATERIAL = { falta: 0, acabou: 1, acabando: 2, vai: 3, ok: 4 };
+function situacaoMaterial(t, r) {
+  const fil = t === 'fil', m = materialDaFila(), tem = num(fil ? r.estoqueG : r.estoque), fila = num((fil ? m.usaF : m.usaI).get(r.id));
+  let falta = 0, primeira = Infinity, pos = 0;
+  m.por.forEach(x => { (fil ? x.fils : x.ins).forEach(y => { if (y.id === r.id && y.falta > 0) { falta += y.falta; primeira = Math.min(primeira, pos); } }); pos++; });
+  falta = fil ? falta : arred(falta, 3);
+  const minimo = fil ? num(S.config.alertaEstoque) : num(r.minimo), avisa = fil || minimo > 0, sobra = arred(tem - fila, 3);
+  const nivel = falta > 0 ? 'falta' : avisa && tem <= 0 ? 'acabou' : avisa && tem <= minimo ? 'acabando' : avisa && fila > 0 && sobra <= minimo ? 'vai' : 'ok';
+  return { t, r, id: r.id, nome: String(r.nome || ''), un: fil ? 'g' : String(r.unidade || 'un'), tem, fila, sobra, falta, minimo, nivel, primeira,
+    pedido: r.pedidoEm ? { em: String(r.pedidoEm), por: String(r.pedidoPor || '') } : null };
+}
+/* Do mais urgente para o menos: o nível; na falta, a que para a fila antes; filamento antes de insumo; o que sobra menos (em
+   relação ao limite); o nome. */
+const folgaMaterial = m => (m.minimo > 0 ? m.sobra / m.minimo : m.sobra > 0 ? 99 : 0);
+const ordemMaterial = (a, b) => NIVEL_MATERIAL[a.nivel] - NIVEL_MATERIAL[b.nivel] || (a.nivel === 'falta' ? a.primeira - b.primeira : 0) ||
+  (a.t === b.t ? 0 : a.t === 'fil' ? -1 : 1) || folgaMaterial(a) - folgaMaterial(b) || a.nome.localeCompare(b.nome, 'pt-BR');
+/* { todos (em ordem), comprar (o que não está ok e não foi pedido), caminho (o que já foi pedido: "A caminho") } */
+const materiaisParaComprar = () => memo('comprar', () => {
+  const todos = [...S.filamentos.map(f => situacaoMaterial('fil', f)), ...S.insumos.map(i => situacaoMaterial('ins', i))].sort(ordemMaterial);
+  return { todos, comprar: todos.filter(m => m.nivel !== 'ok' && !m.pedido), caminho: todos.filter(m => m.pedido) };
+});
+/* Quanto comprar (só sugestão: vai na lista copiada). Filamento: o peso da última compra (sem compra, 1 rolo de 1 kg), em rolos
+   suficientes para o que falta à fila. Insumo: a quantidade da última reposição (ou o que falta à fila, se for mais); sem
+   reposição, o que leva o estoque ao dobro do mínimo contando a fila. */
+function sugestaoCompra(m) {
+  if (m.t === 'fil') {
+    const u = ultimaCompra(m.id), rolo = u && num(u.pesoG) > 0 ? num(u.pesoG) : 1000;
+    return { q: Math.max(1, Math.ceil(m.falta / rolo)) * rolo, u };
+  }
+  const u = ultimaReposicao(m.r), alvo = Math.max(1, m.minimo * 2 + m.fila - m.tem);
+  return { q: u ? Math.max(u.qtd, Math.ceil(m.falta)) : alvo >= 10 ? Math.ceil(alvo / 10) * 10 : Math.ceil(alvo), u };
+}
+/* "Já pedi": a marca no filamento ou no insumo de que ele foi pedido (pedidoEm: quando, com a hora; pedidoPor: o nome curto de
+   quem pediu; pedidoN: um número só desta marca, que o banco sabe conferir). Registrar a compra ou a reposição tira a marca
+   (registrarCompra, reporInsumo). É um campo do cadastro: os dois aparelhos marcando juntos deixam uma marca só. Devolve a marca
+   gravada (pedidoEm), ou '' quando já estava marcado. */
+function marcarPedido(col, id, por) {
+  const r = byId(col, id);
+  if (!r || r.pedidoEm) return '';
+  r.pedidoEm = agoraISO(); r.pedidoPor = String(por || '').slice(0, 40); r.pedidoN = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+  put(col, r);
+  return r.pedidoEm;
+}
+/* Tira a marca. em (opcional): só se a marca ainda for essa, aqui e no banco: o Desfazer (e o Não veio) não apaga a marca que
+   outra pessoa pôs por cima, nem quando o aviso dela ainda não chegou a este aparelho (o banco confere o número da marca; se ele
+   mudou, nada é gravado). */
+function tirarPedido(col, id, em) {
+  const r = byId(col, id);
+  if (!r || !r.pedidoEm || (em && r.pedidoEm !== em)) return false;
+  const n = r.pedidoN;
+  delete r.pedidoEm; delete r.pedidoPor; delete r.pedidoN;
+  put(col, r, em && typeof n === 'number' ? { confere: { pedidoN: n } } : {});
+  return true;
 }
 /* Comparação de fornecedores a partir das compras. */
 function resumoFornecedores() {

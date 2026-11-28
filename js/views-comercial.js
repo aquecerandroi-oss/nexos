@@ -118,6 +118,9 @@ function comPecasProntas() {
       '<a class="btn ghost" href="#producao">Ir para a Produção</a>')}</div>`;
   }
   const temFoto = prontos.some(p => p.foto && p.foto.path), podeProduzir = typeof opNovaOrdem === 'function';
+  /* Acertar estoque: a janela de um campo (views-cadastros.js); o próprio número do estoque também abre o acerto (no celular fica
+     à vista, sem arrastar a tabela). O botão Acertar vem depois do Vender: o Vender continua onde estava e cabe nas mesmas larguras */
+  const podeAcertar = typeof cadAcertar === 'function';
   let pecas = 0, valor = 0, positivos = 0;                     // o total conta só o que existe de verdade (estoque negativo fica de fora)
   const linhas = prontos.map(p => {
     const est = num(p.estoque), min = num(p.estoqueMinimo), abaixo = min > 0 && est < min;
@@ -127,10 +130,10 @@ function comPecasProntas() {
       : temFoto ? '<span style="width:40px;flex:none" aria-hidden="true"></span>' : '';
     return `<tr>
       <td><div class="comfoto">${foto}<div><b>${esc(p.nome)}</b>${p.categoria ? `<small>${esc(p.categoria)}</small>` : ''}</div></div></td>
-      <td class="right num${est < 0 ? ' neg' : ''}">${nf(est)}${est < 0 ? '<small>vendeu mais do que tinha</small>' : ''}</td>
+      <td class="right num${est < 0 ? ' neg' : ''}">${podeAcertar ? cadNumEstoque('prod', p, nf(est)) : nf(est)}${est < 0 ? '<small>vendeu mais do que tinha</small>' : ''}</td>
       <td class="right num">${min > 0 ? nf(min) : '—'}${abaixo ? `<small>${selo('Abaixo do mínimo', 'warn')}</small>` : ''}</td>
       <td class="right num">${est > 0 ? brl(custo) : '—'}</td>
-      <td><div class="rowbtns">${abaixo && podeProduzir ? comBotao('Produzir', 'comProduzir', p.id) : ''}${comBotao('Vender', 'comNovaVenda', p.id, '')}</div></td></tr>`;
+      <td><div class="rowbtns">${abaixo && podeProduzir ? comBotao('Produzir', 'comProduzir', p.id) : ''}${comBotao('Vender', 'comNovaVenda', p.id, '')}${podeAcertar ? cadBtnAcertar('prod', p.id) : ''}</div></td></tr>`;
   }).join('');
   const total = positivos > 1
     ? `<tr class="total"><td>Total</td><td class="right num">${nf(pecas)}</td><td></td><td class="right num">${brl(valor)}</td><td></td></tr>` : '';

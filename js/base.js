@@ -128,6 +128,13 @@ const perfilLimpo = d => {
 };
 const byId =(col, id) => (id ? (S[col] || []).find(x => x.id === id) : undefined);
 const nomeDe = (col, id, vazio = '—') => { const r = byId(col, id); return r ? esc(r.nome) : vazio; };
+/* Nome curto de quem usa este aparelho (ex.: "pedido por Ana"): a pessoa cadastrada para este acesso (Configuração → Pessoas,
+   "É o meu acesso"), se houver; senão, a parte do e-mail antes do @. No modo demonstração, "você". */
+function quemUsa() {
+  if (DEMO) return 'você';
+  const p = EU.id ? S.pessoas.find(x => x.acesso === EU.id && String(x.nome || '').trim()) : null;
+  return p ? String(p.nome).trim().slice(0, 40) : String(EU.email || '').split('@')[0].slice(0, 40) || 'alguém';
+}
 
 /* ---------- Banco: nuvem (Supabase) e demonstração (navegador) ---------- */
 let sb = null;
@@ -421,6 +428,9 @@ function diferenca(col, antes, novo, opts, form, op) {
     }
     if (vn === undefined) x.push(k); else s[k] = vn;
   });
+  // opts.confere ({ campo: número ou null }): a mudança só vale se, no banco, o campo ainda estiver com esse valor (null: sem o
+  // campo). Ex.: tirar a marca do "Já pedi" só se ela ainda for a deste aparelho (o número da marca)
+  if (opts.confere) Object.keys(opts.confere).forEach(k => { if (k !== 'id') e[k] = opts.confere[k]; });
   const p = {};
   if (Object.keys(e).length) p.e = e;
   if (medias.length) p.m = medias.map(m => ({ ...m }));
@@ -480,7 +490,8 @@ function descartarGrupo(g) {
 /* put(colecao, registro, opções): grava o registro (novo ou alterado). A tela muda na hora; o banco recebe só o que
    mudou. Opções: media ({ p: campo do preço, q: campo do estoque, n: quantidade, v: valor pago, e: escala, k: casas }),
    seExistir: 'ignorar' (código fixo: se outro aparelho já criou, fica o dele), trocar (restauração de backup),
-   semVersao (só para putContagem: a mudança não confere a versão do registro). */
+   semVersao (só para putContagem: a mudança não confere a versão do registro), confere ({ campo: número ou null }: só grava se
+   no banco o campo ainda estiver assim; se não estiver, o grupo volta e o aviso de sempre explica). */
 function put(col, rec, opts = {}) {
   const lista = S[col];
   if (!lista) throw new Error('Coleção desconhecida: ' + col);
@@ -510,6 +521,14 @@ function putContagem(col, rec) {
   const g = grupoAberto();
   put(col, rec, { semVersao: true });
   if (g.ops.size) { g.semAviso = true; novoGrupo(); }
+}
+/* Grava o estoque de rec só se, no banco, ele ainda estiver como em esperado ({ campo: valor }): a mesma conferência do estoque
+   digitado numa janela (diferenca). Ex.: o Desfazer do Acertar estoque volta o número só se ninguém mexeu nele depois; se mexeu,
+   nada é gravado e o aviso de sempre explica. */
+function putConferindo(col, rec, esperado) {
+  const k = col + '/' + rec.id, antes = FORM_SALVANDO;
+  FORM_SALVANDO = { k, snap: { ...(vistaDe(k) || {}), ...esperado } };
+  try { return put(col, rec); } finally { FORM_SALVANDO = antes; }
 }
 /* Este aparelho mexeu (fora do salvamento da janela) no registro que a janela aberta edita: ex.: o acerto automático do
    número do pedido na conta. A janela passa a esperar a versão que esse grupo vai gravar, para não ver a mudança do
@@ -977,7 +996,7 @@ document.addEventListener('visibilitychange', () => {
 /* ---------- Versão nova publicada ----------
    Uma aba aberta continua na versão antiga até ser recarregada. Ao voltar para a aba (no máximo a cada 5 minutos) e a
    cada 30 minutos, confere o número da versão publicada e, se houver uma mais nova, oferece atualizar. */
-const VERSAO = 18;
+const VERSAO = 19;
 let avisouVersao = false, conferidoEm = 0;
 async function conferirVersao(forcar = false) {
   if (DEMO || avisouVersao || !$('#main') || (!forcar && Date.now() - conferidoEm < 5 * 60000)) return;
@@ -1245,6 +1264,8 @@ function toast(msg, tipo = '', acao) {
     t.classList.add('com-acao');
     const b = document.createElement('button'), desde = Date.now();
     b.type = 'button'; b.className = 'btn ghost sm'; b.textContent = acao.rotulo || 'Desfazer';
+    // o rótulo entra na chave do toque repetido: o 2º toque em "Marcar tudo como pedido" não cai no Desfazer que nasce no lugar dele
+    b.dataset.k = b.textContent;
     // a mesma tecla repetida que fez a ação (Enter duas vezes) não desfaz na hora
     b.onclick = e => { if (e && e.isTrusted && e.detail === 0 && Date.now() - desde < 500) return; sair(); usarAcaoDoAviso(acao); };
     t.appendChild(b);
@@ -1471,12 +1492,15 @@ function lerCampos(form, fields) {
   });
   return o;
 }
-/* openForm({ title, fields, vals, save(d, form), preview(d, form), change(el, form), wide, saveLabel, extra })
+/* openForm({ title, fields, vals, save(d, form), preview(d, form), change(el, form), wide, saveLabel, extra, esperaEnter })
    - save pode ser async; devolver false mantém a janela aberta (ex.: validação).
    - preview devolve HTML mostrado abaixo dos campos e é recalculado a cada digitação.
-   - change(el, form) é chamado quando um campo muda (el.name nos campos comuns, el.dataset.col nas linhas). */
+   - change(el, form) é chamado quando um campo muda (el.name nos campos comuns, el.dataset.col nas linhas).
+   - esperaEnter (ms): janela que já abre preenchida e grava com um Enter (ex.: a compra igual à última). O Enter que chega antes
+     desse tempo (o segundo de dois Enter seguidos, que abriu a janela e grava sem ela ser vista) não salva, nem o Enter segurado
+     (a repetição da tecla). Quem leu aperta de novo. */
 function openForm(o) {
-  const m = $('#modal'), vals = o.vals || {};
+  const m = $('#modal'), vals = o.vals || {}, abertaEm = Date.now();
   FORM = { o, files: {}, orig: [], novos: [], sujo: false, enviando: 0 };
   /* registro: [coleção, id] do registro que a janela edita. Ao salvar, só vai ao banco o que a pessoa mudou (o resto
      fica como estiver, mesmo que outro aparelho tenha mudado enquanto a janela estava aberta); pedido, ordem, conta e
@@ -1505,6 +1529,11 @@ function openForm(o) {
     try { $('#preview', form).innerHTML = o.preview(lerCampos(form, o.fields), form) || ''; } catch (e) { console.error(e); }
   };
   FORM.form = form; FORM.atualizar = atualizar;
+  if (o.esperaEnter) {
+    form.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && e.target && e.target.tagName === 'INPUT' && (e.repeat || Date.now() - abertaEm < o.esperaEnter)) e.preventDefault();
+    });
+  }
   form.addEventListener('input', e => {
     if (e.target.type === 'file') return;
     FORM.sujo = true;
@@ -1657,11 +1686,16 @@ function imprimir(html) {
   imgs.forEach(i => { i.onload = pronto; i.onerror = pronto; });
   setTimeout(vai, 2500);
 }
-async function copiarTexto(txt) {
-  try { await navigator.clipboard.writeText(txt); toast('Texto copiado.'); }
+/* Copia o texto para a área de transferência. avisar = false: não mostra o aviso (quem chamou mostra o seu). Devolve se copiou. */
+async function copiarTexto(txt, avisar = true) {
+  let copiou = false;
+  try { await navigator.clipboard.writeText(txt); copiou = true; }
   catch (e) {
-    const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); toast('Texto copiado.'); } catch (er) { toast('Copie o texto manualmente.', 'bad'); }
+    const ta = document.createElement('textarea'); ta.value = txt; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { copiou = document.execCommand('copy') !== false; } catch (er) { copiou = false; }
     ta.remove();
   }
+  if (avisar) toast(copiou ? 'Texto copiado.' : 'Copie o texto manualmente.', copiou ? '' : 'bad');
+  return copiou;
 }

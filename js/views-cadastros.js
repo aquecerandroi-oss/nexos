@@ -1,6 +1,7 @@
 'use strict';
-/* Nexos — cadastros: telas de Produtos, Filamentos, Compras e Insumos.
-   Outros arquivos chamam: cadEditarProduto(id) (sem id = produto novo) e cadNovaCompra(filamentoId).
+/* Nexos — cadastros: telas de Produtos, Filamentos, Compras e Insumos, a lista O que comprar e o Acertar estoque.
+   Outros arquivos chamam: cadEditarProduto(id) (sem id = produto novo), cadNovaCompra(filamentoId) e cadReporInsumo(id) (as
+   janelas já preenchidas com a última compra), cadListaComprar('painel' | 'compras') e cadAcertar('fil' | 'ins' | 'prod', id).
    Tudo que é global neste arquivo começa com "cad". A matemática de custo, estoque e preço médio fica em calc.js.
    O peso e o tempo do arquivo do fatiador vêm de lerArquivoFatiado(file), de fatiador.js, quando ele está carregado. */
 
@@ -519,19 +520,22 @@ VIEWS.filamentos = function () {
   const ultima = new Map();
   S.compras.forEach(c => { const d = String(c.data || ''); if (d > (ultima.get(c.filamentoId) || '')) ultima.set(c.filamentoId, d); });
   const baixos = S.filamentos.filter(f => num(f.estoqueG) <= alerta).length;
+  /* o estoque fica logo depois do nome (no celular, à vista sem arrastar a tabela) e o próprio número abre o Acertar estoque;
+     Comprei abre a compra já preenchida com a última (vira Chegou quando alguém marcou "Já pedi"); Acertar vem no fim da linha */
   const linhas = cadPorNome(S.filamentos).map(f => {
     const est = num(f.estoqueG);
     return `<tr>
-      <td class="nowrap">${cadPonto(f.cor)}<b>${esc(f.nome)}</b></td>
+      <td class="nowrap">${cadPonto(f.cor)}<b>${esc(f.nome)}</b>${f.pedidoEm ? `<small class="cad-pedido">${cadPedidoTxt({ em: f.pedidoEm, por: f.pedidoPor })}</small>` : ''}</td>
+      <td class="right num${est <= alerta ? ' neg' : ''}">${cadNumEstoque('fil', f, gramas(est))}</td>
       <td>${esc(f.tipo || '—')}</td>
       <td class="right num">${brl(f.precoKg)}</td>
-      <td class="right num${est <= alerta ? ' neg' : ''}">${gramas(est)}</td>
       <td class="right num">${brl(valorDe(f))}</td>
       <td class="num">${ultima.has(f.id) ? esc(dataBR(ultima.get(f.id))) : '—'}</td>
       <td><div class="rowbtns">
-        ${cadBtn('Comprar', 'cadNovaCompra', f.id)}
+        ${f.pedidoEm ? cadBtnChegou('fil', f) : cadBtn('Comprei', 'cadNovaCompra', f.id)}
         ${cadBtn('Editar', 'cadEditarFilamento', f.id)}
         ${cadBtn('Excluir', 'cadExcluirFilamento', f.id, 'danger')}
+        ${cadBtnAcertar('fil', f.id)}
       </div></td>
     </tr>`;
   }).join('');
@@ -540,7 +544,7 @@ VIEWS.filamentos = function () {
       ${kpi('Valor em estoque', brl(soma(S.filamentos, valorDe)), 'pelo preço médio de cada um')}
       ${kpi('Abaixo do alerta', nf(baixos), 'com ' + gramas(alerta) + ' ou menos', baixos ? 'neg' : '')}
     </div>
-    <div class="panel">${tabela(['Filamento', 'Tipo', { t: 'Preço médio / kg', r: 1 }, { t: 'Estoque', r: 1 }, { t: 'Valor em estoque', r: 1 }, 'Última compra', ''], linhas)}</div>`;
+    <div class="panel">${tabela(['Filamento', { t: 'Estoque', r: 1 }, 'Tipo', { t: 'Preço médio / kg', r: 1 }, { t: 'Valor em estoque', r: 1 }, 'Última compra', ''], linhas)}</div>`;
 };
 function cadEditarFilamento(id) {
   const f = id ? byId('filamentos', id) : null;
@@ -635,16 +639,143 @@ VIEWS.compras = function () {
       ${kpi('Peso comprado no mês', gramas(peso), cadPlural(doMes.length, 'compra', 'compras'))}
       ${kpi('Preço médio por kg no mês', peso > 0 ? brl(pago / (peso / 1000)) : '—', 'valor pago ÷ peso comprado')}
     </div>
+    ${S.filamentos.length || S.insumos.length ? cadListaComprar('compras') : ''}
     <div class="panel"><h2>Compras${lista.length ? `<small>${cadPlural(lista.length, 'registro', 'registros')}</small>` : ''}</h2>${painelCompras}</div>
     <div class="panel"><h2>Fornecedores</h2>${painelFornecedores}</div>`;
 };
-/* Abre o formulário de compra de filamento (já com o filamento escolhido, se vier o id). Também é chamado por outras telas. */
-function cadNovaCompra(filamentoId) {
+/* ---------- Comprei: a janela de sempre, já preenchida com a última compra ----------
+   A compra (e a reposição de insumo) de um item vem com o fornecedor, o peso (a quantidade) e o valor da última compra
+   (reposição) dele, marcados "igual à última"; o cursor fica no valor, selecionado, para conferir ou digitar por cima (no
+   celular o teclado não abre sozinho: é só conferir e tocar em Registrar; tocar num número já preenchido seleciona o número
+   inteiro). Mudou um campo: a marca dele vira "última: ...". Mudou o peso (a quantidade) e o valor ainda é o que a janela pôs: o
+   valor acompanha, pelo preço da última (2 rolos de 1 kg a R$ 104,50 dão R$ 209,00), marcado "pelo preço da última"; nunca fica o
+   valor de 1 rolo para 2. A última que ficou fora do comum (alguém confirmou um valor errado assim mesmo) não é repetida: o valor
+   vem em branco, com um aviso. Trocou o filamento na janela: o que a pessoa ainda não mexeu passa a ser o da última compra do
+   novo. Valor fora do comum (o dobro do preço médio ou mais, a metade ou menos, ou zero; ex.: 1045 no lugar de 104,50) aparece em
+   vermelho e pergunta antes de gravar. O Enter que chega logo depois de a janela abrir não grava (esperaEnter). A conta é a de
+   sempre (registrarCompra e reporInsumo, em calc.js). Sem Desfazer: excluir a compra não refaz o preço médio. */
+const cadDin = v => num(v).toFixed(2).replace('.', ',');                 // dinheiro dentro de um campo: 104,50
+/* "PLA Preto", "PLA Preto e Caixa", "PLA Preto, Caixa e Ímã" */
+const cadJuntar = l => (l.length < 2 ? l.join('') : l.slice(0, -1).join(', ') + ' e ' + l[l.length - 1]);
+/* A marca embaixo de cada campo preenchido: "igual à última (20/11)" enquanto a pessoa não mexe; "pelo preço da última: ..."
+   (auto) quando a janela refez o valor para o peso de agora; um aviso (aviso); depois que a pessoa mexe, "última: ...". */
+function cadMarcarIgual(form, campos) {
+  campos.forEach(c => {
+    const el = campoDoForm(form, c.k), caixa = el && el.parentElement;
+    if (!caixa) return;
+    el.classList.toggle('cad-igual', !!(c.igual || c.auto));
+    const marca = c.igual ? `<span class="cad-igual-txt">Igual à última${c.quando ? ' (' + c.quando + ')' : ''}</span>` : c.auto ? `<span class="cad-igual-txt">${maiuscula(c.auto)}</span>`
+      : c.aviso ? `<span class="aviso">${maiuscula(c.aviso)}</span>` : c.ultima ? 'última: ' + c.ultima : '';
+    const partes = [marca, c.base || ''].filter(Boolean);
+    let dica = $('.hint', caixa);
+    if (!dica && partes.length) { dica = document.createElement('div'); dica.className = 'hint'; caixa.appendChild(dica); }
+    if (dica) dica.innerHTML = partes.length ? maiuscula(partes.join(' · ')) : '';
+  });
+}
+/* O valor pelo preço da última: o mesmo preço por kg (por unidade) para o peso (a quantidade) de agora. Ex.: a última foi 1000 g
+   por R$ 104,50 e agora são 2000 g: R$ 209,00. '' quando não dá para saber. */
+const cadValorPelaUltima = (uValor, uQtd, qtd) => (num(uQtd) > 0 && num(qtd) > 0 ? arred(num(uValor) * num(qtd) / num(uQtd), 2) : '');
+/* No celular, tocar num número já preenchido destas janelas seleciona o número inteiro: digitar troca o valor (como no
+   computador, onde o cursor já começa no número, selecionado). Sem isso, o cursor cai onde o dedo tocou e os dígitos se juntam
+   ("104,50109,90"). */
+function cadTocarSeleciona(form) {
+  if (!form || !('ontouchstart' in window)) return;
+  $$('input[data-num]', form).forEach(el => {
+    let entrou = false;
+    const seleciona = e => { if (entrou && el.value) { if (e && e.type === 'mouseup' && e.cancelable) e.preventDefault(); el.select(); } entrou = false; };
+    el.addEventListener('focus', () => { entrou = true; });
+    el.addEventListener('blur', () => { entrou = false; });
+    // o toque põe o cursor onde o dedo caiu; o fim do mesmo toque seleciona o número inteiro. Vale no mouseup, e não só no clique: o
+    // toque logo depois de a janela abrir, no mesmo lugar do toque que a abriu, tem o clique barrado pela trava do toque repetido
+    el.addEventListener('mouseup', seleciona);
+    el.addEventListener('click', seleciona);
+  });
+}
+/* Dinheiro no campo com os centavos (104,50), mantendo o texto selecionado quando o cursor estava nele. */
+function cadValorNoCampo(form, k, v) {
+  const el = campoDoForm(form, k);
+  if (!el) return;
+  const selecionado = document.activeElement === el;
+  el.value = v === '' || v === null || v === undefined ? '' : cadDin(v);
+  validarNumero(el);
+  if (selecionado) el.select();
+}
+/* Quantas vezes o preço médio, em palavras: "10 vezes o preço médio" ou "29% do preço médio". */
+const cadVezes = r => (r >= 2 ? `${nf(r, r < 10 ? 1 : 0)} vezes o preço médio` : `${pct(r * 100)} do preço médio`);
+/* O preço fora do comum em palavras (r de precoForaDoComum): "R$ 1.045,00 por kg é 10 vezes o preço médio (R$ 104,43)" ou, sem
+   custo, "R$ 0,00 por kg (sem custo) faz o preço médio cair (R$ 100,00)". */
+const cadForaTxt = (r, unitTxt, medioTxt) => (r === 0 ? `${unitTxt} (sem custo) faz o preço médio cair (${medioTxt})` : `${unitTxt} é ${cadVezes(r)} (${medioTxt})`);
+/* O aviso vermelho da prévia quando o preço desta compra está fora do comum (precoForaDoComum, em calc.js). */
+function cadAvisoValor(unit, medio, fmt, un) {
+  const r = precoForaDoComum(unit, medio);
+  return r !== null ? `<div class="cad-conf" role="alert"><b>Confira o valor.</b> ${cadForaTxt(r, fmt(unit) + ' ' + un, fmt(medio))}.</div>` : '';
+}
+/* Valor fora do comum ao salvar: pergunta antes, com o cursor em "Corrigir o valor" (o Enter de quem nem olhou não grava). */
+function cadConferirValor(texto, gravar) {
+  perguntar('Confira o valor', texto + ' O valor está certo?', [
+    { rotulo: 'Registrar assim mesmo', fn: gravar },
+    { rotulo: 'Corrigir o valor', cls: '', foco: true, fn: () => { const v = FORM && campoDoForm(FORM.form, 'valor'); if (v) { v.focus(); v.select(); } } },
+  ]);
+}
+/* Janela aberta pelo Chegou (com a marca do "Já pedi" que ela viu, em) cujo item saiu de A caminho: o outro aparelho registrou a
+   chegada (a última compra é depois da marca) ou tirou a marca. Devolve null (o item continua a caminho, com a mesma marca) ou
+   { txt, outra } para o aviso e a pergunta (outra: a chegada já foi registrada, e gravar aqui seria outra compra). */
+function cadSaiuDoCaminho(t, id, em) {
+  const r = byId(cadColDe(t), id);
+  if (!em || !r || r.pedidoEm === em) return null;
+  const u = t === 'ins' ? ultimaReposicao(r) : ultimaCompra(id);
+  if (u && String(u.criadoEm || '') > String(em)) {
+    return { outra: true, txt: `Outro aparelho já registrou a chegada de ${r.nome} (${t === 'ins' ? nf(u.qtd, 2) + ' ' + (r.unidade || 'un') : gramas(u.pesoG)}, ${brl(u.valor)}).` };
+  }
+  return { outra: false, txt: r.pedidoEm ? `${r.nome} foi marcado como pedido de novo no outro aparelho.` : `${r.nome} não está mais a caminho: o outro aparelho tirou a marca.` };
+}
+/* A janela do Chegou ia gravar a compra de um item que saiu de A caminho enquanto ela estava aberta: pergunta antes, com o cursor
+   (e o Enter) em "Não registrar". Não registrar fecha a janela (no Chegou tudo, segue para a próxima). */
+function cadPerguntarChegou(saiu, registrar, opc) {
+  perguntar('Confira a chegada', esc(saiu.txt) + (saiu.outra ? ' Registrar outra compra?' : ' Registrar a compra assim mesmo?'), [
+    { rotulo: saiu.outra ? 'Registrar outra' : 'Registrar assim mesmo', fn: registrar },
+    { rotulo: 'Não registrar', cls: '', foco: true, fn: () => { if (FORM) FORM.sujo = false; fecharForm(); if (opc.chegou) cadProximoChegou(); } },
+  ]);
+}
+/* O que a janela de compra traz do filamento: o fornecedor, o peso e o valor da última compra dele (sem compra: 1 kg e o valor
+   em branco, como sempre foi). fora: a última ficou fora do comum quando foi registrada (o valor dela não é repetido). */
+function cadPreCompra(filamentoId) {
+  const u = ultimaCompra(filamentoId), fora = compraForaDoComum(u);
+  return { u, fora, fornecedorId: u && byId('fornecedores', u.fornecedorId) ? u.fornecedorId : '', pesoG: u && num(u.pesoG) > 0 ? num(u.pesoG) : 1000, valor: u && !fora ? num(u.valor) : '' };
+}
+/* Abre o formulário de compra de filamento (já com o filamento escolhido, se vier o id), preenchido com a última compra dele.
+   Também é chamado por outras telas. Sem filamento escolhido (Registrar compra, + Nova compra), a janela abre como sempre (o valor
+   em branco) e só se preenche quando a pessoa escolhe o filamento. opc.chegou: "2 de 3" (Chegou tudo: uma compra de cada vez; ao
+   registrar, abre a próxima). opc.em: aberta pelo Chegou, com a marca do "Já pedi" que a tela mostrava (se ela sumir com a janela
+   aberta, pergunta antes de gravar). */
+function cadNovaCompra(filamentoId, opc = {}) {
   if (!S.filamentos.length) { toast('Cadastre um filamento antes de registrar uma compra.'); ir('filamentos'); return; }
   const filamentos = cadPorNome(S.filamentos), vistos = codigosNaTela('compras');   // as compras na tela ao abrir a janela
+  const escolhido = !!byId('filamentos', filamentoId), ini = escolhido ? filamentoId : filamentos[0].id, aberta = Date.now(), mexeu = new Set();
+  let pre = escolhido ? cadPreCompra(ini) : { u: null, fora: false, fornecedorId: '', pesoG: 1000, valor: '' }, valorConferido = false, outraConfirmada = false;
+  const pesoDoCampo = form => numTexto((campoDoForm(form, 'pesoG') || {}).value);
+  // o peso de agora é outro que o da última (e dá para saber o preço por kg dela)
+  const outroPeso = form => { const u = pre.u, g = pesoDoCampo(form); return !!u && num(u.pesoG) > 0 && isFinite(g) && g > 0 && g !== num(u.pesoG); };
+  // o valor que a janela põe enquanto a pessoa não mexe nele: o da última ou, com outro peso, pelo preço da última
+  const valorAuto = form => (!pre.u || pre.fora ? '' : outroPeso(form) ? cadValorPelaUltima(pre.u.valor, pre.u.pesoG, pesoDoCampo(form)) : num(pre.u.valor));
+  // o texto que a janela pôs no campo do valor: enquanto ele estiver lá, a pessoa não mexeu no valor
+  let valorPosto = '';
+  const porValor = (form, v) => { cadValorNoCampo(form, 'valor', v); valorPosto = (campoDoForm(form, 'valor') || {}).value; };
+  const valorIntacto = form => !mexeu.has('valor') && (campoDoForm(form, 'valor') || {}).value === valorPosto;
+  const marcar = form => {
+    const u = pre.u, quando = u ? dataCurta(u.data) : '', auto = !!u && !pre.fora && valorIntacto(form);
+    cadMarcarIgual(form, [
+      { k: 'fornecedorId', igual: !!u && !!pre.fornecedorId && !mexeu.has('fornecedorId'), quando, ultima: u ? nomeDe('fornecedores', u.fornecedorId, 'sem fornecedor') : '' },
+      { k: 'pesoG', igual: !!u && !mexeu.has('pesoG'), quando, ultima: u ? gramas(u.pesoG) : '', base: 'em gramas: 1 kg = 1000' },
+      { k: 'valor', igual: auto && !outroPeso(form), auto: auto && outroPeso(form) ? `pelo preço da última: ${brl(num(u.valor) / (num(u.pesoG) / 1000))} o kg (${quando})` : '',
+        aviso: u && pre.fora && valorIntacto(form) ? `a última (${brl(u.valor)}, ${quando}) ficou fora do comum: digite o valor` : '',
+        quando, ultima: u ? `${brl(u.valor)} (${quando})` : '', base: 'inclua o frete' },
+    ]);
+  };
   openForm({
-    title: 'Registrar compra de filamento',
+    title: 'Registrar compra de filamento' + (opc.chegou ? ` (${opc.chegou})` : ''),
     saveLabel: 'Registrar compra',
+    foco: 'valor', esperaEnter: 500,
     fields: [
       { k: 'data', label: 'Data da compra', type: 'date' },
       { k: 'filamentoId', label: 'Filamento', type: 'select', req: true, options: filamentos.map(f => [f.id, f.nome]) },
@@ -653,7 +784,21 @@ function cadNovaCompra(filamentoId) {
       { k: 'valor', label: 'Valor total pago (R$)', type: 'number', req: true, hint: 'Inclua o frete' },
       { k: 'obs', label: 'Observação' },
     ],
-    vals: { data: hoje(), filamentoId: byId('filamentos', filamentoId) ? filamentoId : filamentos[0].id, fornecedorId: '', pesoG: 1000 },
+    vals: { data: hoje(), filamentoId: ini, fornecedorId: pre.fornecedorId, pesoG: pre.pesoG, valor: pre.valor },
+    change: (el, form) => {
+      if (el.name === 'filamentoId') {
+        pre = cadPreCompra(el.value);
+        if (!mexeu.has('fornecedorId')) campoDoForm(form, 'fornecedorId').value = pre.fornecedorId;
+        if (!mexeu.has('pesoG')) { campoDoForm(form, 'pesoG').value = paraCampo(pre.pesoG); validarNumero(campoDoForm(form, 'pesoG')); }
+        if (valorIntacto(form)) porValor(form, valorAuto(form));
+      } else if (['fornecedorId', 'pesoG', 'valor'].includes(el.name)) {
+        // o peso mudou e o valor ainda é o que a janela pôs: ele acompanha, pelo preço da última (nunca fica o valor de 1 rolo para 2)
+        if (el.name === 'pesoG' && valorIntacto(form) && valorAuto(form) !== '') porValor(form, valorAuto(form));
+        else if (!valorIntacto(form)) mexeu.add('valor');
+        mexeu.add(el.name);
+      }
+      marcar(form);
+    },
     preview: (d, form) => {
       const f = byId('filamentos', d.filamentoId), g = num(d.pesoG), valor = num(d.valor);
       if (!f) return '';
@@ -663,24 +808,43 @@ function cadNovaCompra(filamentoId) {
       /* mesma conta de registrarCompra (calc.js): média ponderada com o que já havia, sem contar estoque negativo */
       const est = num(f.estoqueG), base = Math.max(0, est);
       const novoPreco = arred((base / 1000 * num(f.precoKg) + valor) / ((base + g) / 1000), 2);
-      return `<div class="calc">
-        <div><span>Preço por kg desta compra</span><b>${brl(valor / (g / 1000))}</b></div>
+      const porKg = valor / (g / 1000), fila = situacaoMaterial('fil', f).fila, depois = arred(est + g - fila, 3);
+      return cadAvisoValor(porKg, num(f.precoKg), brl, 'por kg') + `<div class="calc">
+        <div><span>Preço por kg desta compra</span><b>${brl(porKg)}</b></div>
         <div><span>Estoque depois da compra (hoje: ${gramas(est)})</span><b>${gramas(arred(est + g))}</b></div>
+        ${fila > 0 ? `<div><span>Depois da fila (ela usa ${gramas(fila)})</span><b class="${depois < 0 ? 'neg' : ''}">${depois >= 0 ? 'sobram ' + gramas(depois) : 'ainda faltam ' + gramas(-depois)}</b></div>` : ''}
         <div class="tot"><span>Novo preço médio por kg (hoje: ${brl(f.precoKg)})</span><b>${brl(novoPreco)}</b></div>
       </div>` + (g < 50 ? '<p class="aviso txt-sm" style="margin-top:10px">Confira o peso: ele é em gramas (1 kg = 1000).</p>' : '');
     },
     save: d => {
+      if (opc.depois && Date.now() - aberta < 800) return false;       // Chegou tudo: o 2º toque (ou Enter) na anterior não grava esta
       if (!byId('filamentos', d.filamentoId)) { toast('Escolha o filamento comprado.', 'bad'); return false; }
       if (!(d.pesoG > 0)) { toast('Informe o peso comprado, em gramas.', 'bad'); return false; }
       if (!(d.valor >= 0)) { toast('O valor pago não pode ser negativo.', 'bad'); return false; }
+      // aberta pelo Chegou: o item saiu de A caminho com a janela aberta (o outro aparelho registrou a chegada ou tirou a marca)
+      const saiu = opc.em && d.filamentoId === filamentoId && !outraConfirmada ? cadSaiuDoCaminho('fil', filamentoId, opc.em) : null;
+      if (saiu) { cadPerguntarChegou(saiu, () => { outraConfirmada = true; FORM.form.requestSubmit(); }, opc); return false; }
       // código fixo (material, dia, peso, valor e um contador que pula só as compras que já estavam na tela ao abrir a janela):
-      // a mesma compra salva nos dois aparelhos entra uma vez só, mesmo quando a do outro chega com esta janela aberta
-      const id = codigoCompra(d, vistos), ja = byId('compras', id), f = byId('filamentos', d.filamentoId);
+      // a mesma compra salva nos dois aparelhos entra uma vez só, mesmo quando a do outro chega com esta janela aberta. Quem
+      // confirmou "Registrar outra" grava outra compra: o contador pula também as que estão na tela agora
+      const id = codigoCompra(d, outraConfirmada ? codigosNaTela('compras') : vistos), ja = byId('compras', id), f = byId('filamentos', d.filamentoId);
       if (ja) { toast(`Outro aparelho já registrou esta compra (${gramas(ja.pesoG)}${f ? ' de ' + f.nome : ''}, ${brl(ja.valor)}) enquanto esta janela estava aberta. Nada foi gravado em dobro: confira em Compras e registre de novo, se for outra.`, 'bad'); return; }
+      // valor fora do comum: pergunta antes (depois de ver que a compra ainda não entrou: não pergunta à toa)
+      const conferido = valorConferido, porKg = d.valor / (d.pesoG / 1000), r = precoForaDoComum(porKg, num(f.precoKg));
+      valorConferido = false;
+      if (r !== null && !conferido) {
+        cadConferirValor(r === 0 ? `<b>${esc(f.nome)}</b> sem custo (${brl(0)}) faz o preço médio cair (${brl(f.precoKg)} por kg).`
+          : `<b>${esc(f.nome)}</b> a <b>${brl(porKg)} por kg</b> é ${cadVezes(r)} (${brl(f.precoKg)}).`, () => { valorConferido = true; FORM.form.requestSubmit(); });
+        return false;
+      }
       registrarCompra({ ...d, id });
       toast('Compra registrada. Estoque e preço médio atualizados.');
+      if (opc.chegou) cadProximoChegou();
     },
   });
+  porValor(FORM.form, pre.valor);
+  marcar(FORM.form);
+  cadTocarSeleciona(FORM.form);
 }
 function cadExcluirCompra(id) {
   const c = byId('compras', id);
@@ -734,23 +898,25 @@ VIEWS.insumos = function () {
   }
   const usos = new Map();   // insumo -> em quantos produtos aparece
   S.produtos.forEach(p => { new Set((p.insumos || []).map(x => x.insumoId)).forEach(id => usos.set(id, (usos.get(id) || 0) + 1)); });
+  /* o estoque (com a unidade) fica logo depois do nome e o próprio número abre o Acertar estoque; Repor abre a reposição já
+     preenchida com a última (vira Chegou quando alguém marcou "Já pedi"); Acertar vem no fim da linha */
   const linhas = cadPorNome(S.insumos).map(i => {
     const est = num(i.estoque), minimo = num(i.minimo), n = usos.get(i.id) || 0;
     return `<tr>
-      <td style="min-width:150px"><b>${esc(i.nome)}</b></td>
-      <td>${esc(i.unidade || 'un')}</td>
+      <td style="min-width:150px"><b>${esc(i.nome)}</b>${i.pedidoEm ? `<small class="cad-pedido">${cadPedidoTxt({ em: i.pedidoEm, por: i.pedidoPor })}</small>` : ''}</td>
+      <td class="right num${est < 0 || (minimo > 0 && est <= minimo) ? ' neg' : ''}">${cadNumEstoque('ins', i, nf(est, 2) + ' ' + esc(i.unidade || 'un'))}</td>
       <td class="right num">${cadCusto(i.custo)}</td>
-      <td class="right num${est < 0 || (minimo > 0 && est <= minimo) ? ' neg' : ''}">${nf(est, 2)}</td>
       <td class="right num">${minimo > 0 ? nf(minimo, 2) : '—'}</td>
       <td>${n ? cadPlural(n, 'produto', 'produtos') : '<span class="muted">Nenhum produto</span>'}</td>
       <td><div class="rowbtns">
-        ${cadBtn('Repor', 'cadReporInsumo', i.id)}
+        ${i.pedidoEm ? cadBtnChegou('ins', i) : cadBtn('Repor', 'cadReporInsumo', i.id)}
         ${cadBtn('Editar', 'cadEditarInsumo', i.id)}
         ${cadBtn('Excluir', 'cadExcluirInsumo', i.id, 'danger')}
+        ${cadBtnAcertar('ins', i.id)}
       </div></td>
     </tr>`;
   }).join('');
-  return topo + `<div class="panel">${tabela(['Insumo', 'Unidade', { t: 'Custo por unidade', r: 1 }, { t: 'Estoque', r: 1 }, { t: 'Mínimo', r: 1 }, 'Usado em', ''], linhas)}</div>`;
+  return topo + `<div class="panel">${tabela(['Insumo', { t: 'Estoque', r: 1 }, { t: 'Custo por unidade', r: 1 }, { t: 'Mínimo', r: 1 }, 'Usado em', ''], linhas)}</div>`;
 };
 function cadEditarInsumo(id) {
   const i = id ? byId('insumos', id) : null;
@@ -782,43 +948,90 @@ function cadEditarInsumo(id) {
     },
   });
 }
-function cadReporInsumo(id) {
+/* Repor insumo: a janela de sempre, já preenchida com a quantidade e o valor da última reposição dele (lida do lançamento que a
+   reposição grava no Financeiro: ultimaReposicao, em calc.js), como a compra de filamento: mudou a quantidade e o valor ainda é o
+   que a janela pôs, ele acompanha pelo preço da última; a última que ficou fora do comum não é repetida. Sem reposição com valor,
+   vem em branco, como sempre foi. opc.chegou: "2 de 3" (Chegou tudo). opc.em: aberta pelo Chegou (ver cadNovaCompra). */
+function cadReporInsumo(id, opc = {}) {
   const i = byId('insumos', id);
   if (!i) return;
   const vistos = codigosNaTela('lancamentos');                // os lançamentos na tela ao abrir a janela
+  const u = ultimaReposicao(i), fora = reposicaoForaDoComum(u), un = i.unidade || 'un', aberta = Date.now(), mexeu = new Set();
+  let valorConferido = false, outraConfirmada = false;
+  const qtdDoCampo = form => numTexto((campoDoForm(form, 'qtd') || {}).value);
+  const outraQtd = form => { const q = qtdDoCampo(form); return !!u && isFinite(q) && q > 0 && q !== u.qtd; };
+  const valorAuto = form => (!u || fora ? '' : outraQtd(form) ? cadValorPelaUltima(u.valor, u.qtd, qtdDoCampo(form)) : u.valor);
+  // o texto que a janela pôs no campo do valor: enquanto ele estiver lá, a pessoa não mexeu no valor
+  let valorPosto = '';
+  const porValor = (form, v) => { cadValorNoCampo(form, 'valor', v); valorPosto = (campoDoForm(form, 'valor') || {}).value; };
+  const valorIntacto = form => !mexeu.has('valor') && (campoDoForm(form, 'valor') || {}).value === valorPosto;
+  const marcar = form => {
+    const quando = u ? dataCurta(u.data) : '', auto = !!u && !fora && valorIntacto(form);
+    cadMarcarIgual(form, [
+      { k: 'qtd', igual: !!u && !mexeu.has('qtd'), quando, ultima: u ? nf(u.qtd, 2) + ' ' + esc(un) : '' },
+      { k: 'valor', igual: auto && !outraQtd(form), auto: auto && outraQtd(form) ? `pelo preço da última: ${cadCusto(u.valor / u.qtd)} por ${esc(un)} (${quando})` : '',
+        aviso: u && fora && valorIntacto(form) ? `a última (${brl(u.valor)}, ${quando}) ficou fora do comum: digite o valor` : '',
+        quando, ultima: u ? `${brl(u.valor)} (${quando})` : '', base: 'entra no Financeiro como gasto de Insumos e atualiza o custo médio' },
+    ]);
+  };
   openForm({
-    title: 'Repor ' + i.nome,
+    title: 'Repor ' + i.nome + (opc.chegou ? ` (${opc.chegou})` : ''),
     saveLabel: 'Registrar reposição',
+    foco: u ? 'valor' : 'qtd', esperaEnter: 500,
     fields: [
-      { k: 'qtd', label: 'Quantidade comprada (' + (i.unidade || 'un') + ')', type: 'number', req: true },
+      { k: 'qtd', label: 'Quantidade comprada (' + un + ')', type: 'number', req: true },
       { k: 'valor', label: 'Valor total pago (R$)', type: 'number', hint: 'Entra no Financeiro como gasto de Insumos e atualiza o custo médio' },
       { k: 'data', label: 'Data', type: 'date' },
     ],
-    vals: { data: hoje() },
+    vals: { data: hoje(), ...(u ? { qtd: u.qtd, valor: fora ? '' : u.valor } : {}) },
+    change: (el, form) => {
+      if (el.name !== 'qtd' && el.name !== 'valor') return;
+      // a quantidade mudou e o valor ainda é o que a janela pôs: ele acompanha, pelo preço da última
+      if (el.name === 'qtd' && valorIntacto(form) && valorAuto(form) !== '') porValor(form, valorAuto(form));
+      else if (!valorIntacto(form)) mexeu.add('valor');
+      mexeu.add(el.name);
+      marcar(form);
+    },
     preview: d => {
       const a = byId('insumos', id) || i, qtd = num(d.qtd), valor = num(d.valor), un = esc(a.unidade || 'un');
       if (!(qtd > 0)) return '';
       /* mesma conta de reporInsumo (calc.js): o custo médio só muda quando há valor pago */
       const base = Math.max(0, num(a.estoque));
       const novoCusto = valor > 0 ? arred((base * num(a.custo) + valor) / (base + qtd), 4) : num(a.custo);
-      return `<div class="calc">
+      return (valor > 0 ? cadAvisoValor(valor / qtd, num(a.custo), cadCusto, 'por ' + un) : '') + `<div class="calc">
         ${valor > 0 ? `<div><span>Custo por unidade nesta compra</span><b>${cadCusto(valor / qtd)}</b></div>` : ''}
         <div><span>Estoque depois (hoje: ${nf(a.estoque, 2)} ${un})</span><b>${nf(arred(num(a.estoque) + qtd, 3), 2)} ${un}</b></div>
         <div class="tot"><span>Custo médio por unidade (hoje: ${cadCusto(a.custo)})</span><b>${cadCusto(novoCusto)}</b></div>
       </div>` + (valor > 0 ? '' : '<p class="hint" style="margin-top:10px">Sem valor pago, o custo médio não muda e nada entra no Financeiro.</p>');
     },
     save: d => {
+      if (opc.depois && Date.now() - aberta < 800) return false;       // Chegou tudo: o 2º toque (ou Enter) na anterior não grava esta
       if (!(d.qtd > 0)) { toast('Informe a quantidade comprada.', 'bad'); return false; }
       const atual = byId('insumos', id);
       if (!atual) { toast('Este insumo não existe mais.', 'bad'); return false; }
+      // aberta pelo Chegou: o insumo saiu de A caminho com a janela aberta (o outro aparelho registrou a chegada ou tirou a marca)
+      const saiu = opc.em && !outraConfirmada ? cadSaiuDoCaminho('ins', id, opc.em) : null;
+      if (saiu) { cadPerguntarChegou(saiu, () => { outraConfirmada = true; FORM.form.requestSubmit(); }, opc); return false; }
       // código fixo no lançamento do gasto (o contador pula só os lançamentos que já estavam na tela ao abrir a janela): a mesma
-      // reposição salva nos dois aparelhos entra uma vez só, mesmo quando a do outro chega com esta janela aberta
-      const cod = d.valor > 0 ? codigoReposicao(atual.id, d.qtd, d.valor, d.data, vistos) : '', ja = cod ? byId('lancamentos', cod) : null;
+      // reposição salva nos dois aparelhos entra uma vez só, mesmo quando a do outro chega com esta janela aberta (quem confirmou
+      // "Registrar outra" grava outra: o contador pula também os que estão na tela agora)
+      const cod = d.valor > 0 ? codigoReposicao(atual.id, d.qtd, d.valor, d.data, outraConfirmada ? codigosNaTela('lancamentos') : vistos) : '', ja = cod ? byId('lancamentos', cod) : null;
       if (ja) { toast(`Outro aparelho já registrou esta reposição (${nf(d.qtd, 2)} ${atual.unidade || 'un'} de ${atual.nome}, ${brl(ja.valor)}) enquanto esta janela estava aberta. Nada foi gravado em dobro: confira em Insumos e registre de novo, se for outra.`, 'bad'); return; }
+      // valor fora do comum: pergunta antes (depois de ver que a reposição ainda não entrou). Sem valor pago o custo médio não muda
+      const conferido = valorConferido, r = d.valor > 0 ? precoForaDoComum(d.valor / d.qtd, num(atual.custo)) : null;
+      valorConferido = false;
+      if (r !== null && !conferido) {
+        cadConferirValor(`<b>${esc(atual.nome)}</b> a <b>${cadCusto(d.valor / d.qtd)} por ${esc(un)}</b> é ${cadVezes(r)} (${cadCusto(atual.custo)}).`, () => { valorConferido = true; FORM.form.requestSubmit(); });
+        return false;
+      }
       reporInsumo(atual, d.qtd, d.valor, d.data, cod);
       toast('Reposição registrada.');
+      if (opc.chegou) cadProximoChegou();
     },
   });
+  porValor(FORM.form, u && !fora ? u.valor : '');
+  marcar(FORM.form);
+  cadTocarSeleciona(FORM.form);
 }
 function cadExcluirInsumo(id) {
   const i = byId('insumos', id);
@@ -829,4 +1042,337 @@ function cadExcluirInsumo(id) {
   rm('insumos', id);
   render();
   toast('Insumo excluído.');
+}
+
+/* ---------- O que comprar (Painel e Compras) ----------
+   Do mais urgente para o menos (materiaisParaComprar, em calc.js, que conta a fila inteira): "faltam 207 g · tem 165 g", com
+   Comprei (filamento) ou Repor (insumo) e Já pedi em cada linha. Embaixo, A caminho: o que alguém já marcou como pedido (quando e
+   por quem, mesmo esquecido há dias), com Chegou (a compra já preenchida) e, em Compras, Não veio. Copiar lista monta o texto para
+   o WhatsApp e oferece "Marcar tudo como pedido". A linha recém-marcada fica no lugar até trocar de tela (não pula debaixo do dedo),
+   com "desfazer". Lista longa: os mais urgentes e "Ver mais". Só o Já pedi (e o Não veio) grava; o resto só lê. Os botões são
+   op-acao: esperam 1 s quando a lista mudou pelo outro aparelho (fim de views-operacao.js). */
+const cadRecentes = new Map();         // 't:id' -> { em, tela, aviso }: marcado aqui como pedido, nesta visita à tela
+const cadColDe = t => (t === 'ins' ? 'insumos' : 'filamentos');
+const cadRecente = m => { const r = m.pedido && cadRecentes.get(m.t + ':' + m.id); return !!r && r.tela === paginaAtual() && r.em === m.pedido.em; };
+const cadQtdMat = (m, v) => `<span class="nowrap">${m.t === 'fil' ? gramas(v) : nf(v, 2) + ' ' + esc(m.un)}</span>`;
+const cadPontoMat = m => (m.t === 'fil' ? cadPonto(m.r.cor) : `<span class="cad-ico">${icone('insumos')}</span>`);
+const cadBtnMat = (rotulo, fn, m, cls = 'ghost', em = '') =>
+  `<button type="button" class="btn ${cls} sm op-acao" data-t="${m.t}" data-id="${esc(m.id)}"${em ? ` data-em="${esc(em)}"` : ''} onclick="${fn}(this.dataset.t, this.dataset.id${em ? ', this.dataset.em' : ''})">${rotulo}</button>`;
+/* Chegou leva a marca do "Já pedi" que a tela mostra: se o item já saiu de A caminho quando o clique chega (o outro aparelho
+   registrou a chegada e esta tela ainda não redesenhou), pergunta antes de abrir a compra. */
+const cadBtnChegouMat = m => cadBtnMat('Chegou', 'cadComprei', m, 'ghost', m.pedido ? m.pedido.em : '');
+/* Chegou na linha da tabela (Filamentos e Insumos), com a marca vista na tela, como na lista O que comprar. */
+const cadBtnChegou = (t, r) => `<button type="button" class="btn ghost sm" data-t="${t}" data-id="${esc(r.id)}" data-em="${esc(r.pedidoEm)}" onclick="cadComprei(this.dataset.t, this.dataset.id, this.dataset.em)">Chegou</button>`;
+/* Acertar na linha da tabela: no fim, depois dos botões de sempre (eles continuam onde estavam na versão 18 e cabem nas mesmas
+   larguras); no celular fica escondido, porque o próprio número do estoque abre o Acertar (à vista, sem arrastar a tabela). */
+const cadBtnAcertar = (t, id) => `<button type="button" class="btn ghost sm cad-acertar" data-t="${t}" data-id="${esc(id)}" onclick="cadAcertar(this.dataset.t, this.dataset.id)">Acertar</button>`;
+/* "pedido hoje por Ana", "pedido há 2 dias por você" (HTML). Esquecido há uma semana ou mais: em amarelo. */
+function cadPedidoTxt(p) {
+  const em = String((p && p.em) || ''), dia = /T/.test(em) ? (isFinite(Date.parse(em)) ? dataLocal(new Date(em)) : '') : em.slice(0, 10);
+  const d = EH_DATA.test(dia) ? Math.round((Date.parse(hoje() + 'T12:00:00') - Date.parse(dia + 'T12:00:00')) / 864e5) : NaN;
+  const quando = !isFinite(d) ? '' : d <= 0 ? ' hoje' : d === 1 ? ' ontem' : ' há ' + d + ' dias';
+  return `<span${d >= 7 ? ' class="aviso"' : ''}>pedido${quando}${p && p.por ? ' por ' + esc(p.por) : ''}</span>`;
+}
+/* A última compra (reposição) do material, para a lista de Compras. */
+function cadUltimaTxt(m) {
+  if (m.t === 'fil') { const u = ultimaCompra(m.id), fo = u && byId('fornecedores', u.fornecedorId); return u ? `última: ${brl(u.valor)}${fo ? ' na ' + esc(fo.nome) : ''} (${dataCurta(u.data)})` : ''; }
+  const u = ultimaReposicao(m.r);
+  return u ? `última: ${nf(u.qtd, 2)} ${esc(m.un)} por ${brl(u.valor)} (${dataCurta(u.data)})` : '';
+}
+/* O que diz a linha. completo (em Compras): também o que a fila usa e a última compra. */
+function cadSubComprar(m, completo) {
+  const q = v => cadQtdMat(m, v), limite = m.t === 'fil' ? 'aviso em ' + gramas(m.minimo) : m.minimo > 0 ? 'mínimo ' + nf(m.minimo, 2) : '';
+  const usa = m.fila > 0 ? 'a fila usa ' + q(m.fila) : '';
+  // no Painel, frase curta: o insumo mostra o mínimo; o filamento, o que a fila usa (ou, sem fila, onde o aviso começa)
+  const curto = m.t === 'ins' && limite ? limite : usa || limite;
+  const partes = m.nivel === 'falta' ? [`<span class="neg">faltam ${q(m.falta)}</span>`, 'tem ' + q(m.tem), completo ? usa : '']
+    : m.nivel === 'acabou' ? ['<span class="neg">acabou</span>', limite]
+      : m.nivel === 'acabando' ? [`<span class="aviso">tem ${q(m.tem)}</span>`, ...(completo ? [limite, usa] : [curto])]
+        : [`<span class="info">vão sobrar ${q(m.sobra)}</span>`, 'tem ' + q(m.tem), completo ? usa : ''];
+  if (completo) partes.push(cadUltimaTxt(m));
+  return partes.filter(Boolean).join(' · ');
+}
+/* A linha recém-marcada: "pedido hoje por você", com Chegou e "desfazer" à direita, no lugar de Comprei e Já pedi (logo depois de
+   uma ação, o aviso do computador fica no canto de baixo à esquerda: os botões da linha, à direita, nunca ficam embaixo dele). */
+function cadLinhaComprar(m, completo) {
+  const marcado = cadRecente(m), tom = marcado ? 'info' : m.nivel === 'falta' || m.nivel === 'acabou' ? 'bad' : m.nivel === 'acabando' ? 'warn' : 'info';
+  const sub = marcado ? cadPedidoTxt(m.pedido) : cadSubComprar(m, completo);
+  const bts = marcado ? cadBtnChegouMat(m) + cadBtnMat('desfazer', 'cadDesmarcar', m, 'ghost cad-fraco cad-desf')
+    : cadBtnMat(m.t === 'fil' ? 'Comprei' : 'Repor', 'cadComprei', m) + cadBtnMat('Já pedi', 'cadPedi', m, 'ghost cad-fraco');
+  return `<li class="${tom}"><div class="op-t"><b>${cadPontoMat(m)}${esc(m.nome)}</b><small>${sub}</small></div><div class="cad-bts">${bts}</div></li>`;
+}
+function cadLinhaCaminho(m, completo) {
+  const sub = [cadPedidoTxt(m.pedido), 'tem ' + cadQtdMat(m, m.tem), m.falta ? `<span class="neg">faltam ${cadQtdMat(m, m.falta)}</span>` : ''].filter(Boolean).join(' · ');
+  return `<li class="info"><div class="op-t"><b>${cadPontoMat(m)}${esc(m.nome)}</b><small>${sub}</small></div><div class="cad-bts">${cadBtnChegouMat(m)}${completo ? cadBtnMat('Não veio', 'cadNaoVeio', m, 'ghost cad-fraco') : ''}</div></li>`;
+}
+/* onde: 'painel' (no lugar da lista Material acabando da versão 18: #op-material, aonde o 3º ícone do celular leva) ou 'compras'
+   (a lista completa, com o que a fila usa, a última compra e Não veio). No Painel, A caminho também mostra os primeiros e "Ver
+   mais". "Tem material para a fila inteira" (com o visto) só quando nada falta, nem o que está a caminho; com tudo já pedido, a
+   lista diz que falta chegar. */
+function cadListaComprar(onde) {
+  const completo = onde === 'compras', { todos, caminho: pedidos } = materiaisParaComprar();
+  const comprar = todos.filter(m => (m.nivel !== 'ok' && !m.pedido) || cadRecente(m)), caminho = pedidos.filter(m => !cadRecente(m));
+  const base = completo ? (opNoCelular() ? 6 : 10) : opNoCelular() ? 4 : 5, lim = comprar.length === base + 1 ? comprar.length : base;
+  const max = opListaAberta.comprar ? comprar.length : lim, n = comprar.filter(m => !m.pedido).length;
+  const graves = comprar.some(m => !m.pedido && (m.nivel === 'falta' || m.nivel === 'acabou'));
+  const mais = cls => (comprar.length > lim ? `<button type="button" class="${cls}" onclick="opAlternarLista('comprar')">${opListaAberta.comprar ? 'Mostrar menos' : 'Ver mais ' + nf(comprar.length - lim)}</button>` : '');
+  const baseC = opNoCelular() ? 4 : 5, limC = completo || caminho.length <= baseC + 1 ? caminho.length : baseC, maxC = opListaAberta.caminho ? caminho.length : limC;
+  const maisC = cls => (caminho.length > limC ? `<button type="button" class="${cls}" onclick="opAlternarLista('caminho')">${opListaAberta.caminho ? 'Mostrar menos' : 'Ver mais ' + nf(caminho.length - limC)}</button>` : '');
+  const copiar = n ? '<button type="button" class="link txt-sm cad-copiar" onclick="cadCopiarLista()">Copiar lista</button>' : '';
+  const certo = caminho.some(m => m.nivel !== 'ok') ? '<div class="op-certo cad-espera"><span>Tudo já foi pedido. Falta chegar o que está em A caminho.</span></div>'
+    : `<div class="op-certo">${opSvg('ok')}<span>Nada para comprar: tem material para a fila inteira.</span></div>`;
+  const chegouTudo = caminho.length > 1 ? '<button type="button" class="btn ghost sm op-acao" onclick="cadChegouTudo()">Chegou tudo</button>' : '';
+  const corpo = (comprar.length ? `<ul class="op-lista">${comprar.slice(0, max).map(m => cadLinhaComprar(m, completo)).join('')}</ul>${mais('op-mais')}` : certo) +
+    (caminho.length ? `<div class="cad-grupo"><span>A caminho</span>${maisC('op-mais-topo') || chegouTudo ? `<div class="cad-grupo-dir">${maisC('op-mais-topo')}${chegouTudo}</div>` : ''}</div><ul class="op-lista">${caminho.slice(0, maxC).map(m => cadLinhaCaminho(m, completo)).join('')}</ul>${maisC('op-mais')}` : '');
+  const dir = copiar + mais('op-mais-topo');
+  return `<section class="panel op-bloco cad-comprar" id="${completo ? 'cad-comprar' : 'op-material'}"><div class="panel-head"><h2>O que comprar${n ? ` <small class="${graves ? 'neg' : ''}">${nf(n)}</small>` : ''}</h2>${dir ? `<div class="op-dir">${dir}</div>` : ''}</div>${corpo}</section>`;
+}
+/* Comprei, Repor e Chegou: a janela de sempre, já preenchida com a última compra (reposição). em: o Chegou, com a marca do "Já
+   pedi" que a tela mostrava. Se o item já saiu de A caminho (o outro aparelho registrou a chegada e esta tela ainda não tinha
+   redesenhado: o mouse parado em cima do botão segura o redesenho), pergunta antes, com o cursor em "Não registrar". */
+function cadComprei(t, id, em) {
+  if (!byId(cadColDe(t), id)) return opRenderDaqui();
+  const abrir = opc => (t === 'ins' ? cadReporInsumo(id, opc) : cadNovaCompra(id, opc));
+  const saiu = em ? cadSaiuDoCaminho(t, id, em) : null;
+  if (!saiu) return abrir(em ? { em } : {});
+  opRenderDaqui();
+  perguntar('Confira a chegada', esc(saiu.txt) + (saiu.outra ? ' Registrar outra compra?' : ' Registrar a compra assim mesmo?'), [
+    { rotulo: saiu.outra ? 'Registrar outra' : 'Registrar assim mesmo', fn: () => abrir({}) },
+    { rotulo: 'Não registrar', cls: '', foco: true },
+  ]);
+}
+/* O banco não aceitou tirar a marca do "Já pedi" (Desfazer, Não veio): ela mudou no outro aparelho e o aviso ainda não tinha chegado
+   aqui (o banco confere o número da marca). O aviso conta como ficou. total: quantas o mesmo toque tirou (o Desfazer do Marcar
+   tudo); desfazer: foi um Desfazer. */
+function cadExplicarTirar(desfazer, total = 1) {
+  return recusas => {
+    if (recusas.some(x => x.motivo !== 'mudou')) return false;                    // excluído no outro aparelho: o aviso de sempre
+    const nomes = cadJuntar(recusas.map(x => (x.d && x.d.nome) || '?')), varios = recusas.length > 1, ok = total - recusas.length;
+    const comMarca = recusas.filter(x => x.d && x.d.pedidoEm), quem = cadJuntar([...new Set(comMarca.map(x => x.d.pedidoPor || 'outra pessoa'))]);
+    const como = comMarca.length === recusas.length ? `${nomes} continua${varios ? 'm' : ''} a caminho: ${quem} marcou como pedido pouco antes.`
+      : `${nomes} já tinha${varios ? 'm' : ''} saído de A caminho no outro aparelho.`;
+    const feito = ok > 0 ? `Desfeito: ${ok === 1 ? '1 item voltou' : nf(ok) + ' itens voltaram'} para a lista do que comprar. ` : '';
+    toast(feito + como + (desfazer && ok <= 0 ? ' Nada foi desfeito.' : ''), 'warn');
+    return true;
+  };
+}
+const cadGrupoAgora = () => (grupoAtual && grupoAtual.ops.size ? grupoAtual : null);
+/* Já pedi: 1 toque marca que foi pedido, por quem e quando (marcarPedido, em calc.js). A linha fica no lugar, com "desfazer",
+   até trocar de tela; o aviso tem Desfazer por 8 s. */
+function cadPedi(t, id) {
+  const col = cadColDe(t), r = byId(col, id);
+  if (!r) return opRenderDaqui();
+  if (r.pedidoEm) { opRenderDaqui(); return toast(`${r.nome} já estava marcado como pedido.`); }
+  const marca = marcaDesfazer(), em = marcarPedido(col, id, quemUsa());
+  const aviso = avisoDesfazer(`Marcado como pedido: ${r.nome}.`, marca, () => cadDesmarcar(t, id, em));
+  cadRecentes.set(t + ':' + id, { em, tela: paginaAtual(), aviso });
+  opRenderDaqui();
+}
+/* Desfaz o Já pedi daqui: só se a marca ainda for a que este aparelho pôs (aqui e no banco: tirarPedido, em calc.js). */
+function cadDesmarcar(t, id, em) {
+  const col = cadColDe(t), r = byId(col, id), rec = cadRecentes.get(t + ':' + id), meu = em || (rec && rec.em);
+  if (rec && rec.aviso && rec.aviso.isConnected && rec.aviso._sair) rec.aviso._sair();
+  if (!r || !meu || r.pedidoEm !== meu) { opRenderDaqui(); return toast('Isto já mudou depois. Nada foi desfeito.', 'bad'); }
+  tirarPedido(col, id, meu);
+  const g = cadGrupoAgora();
+  if (g) g.explicar = cadExplicarTirar(true);
+  cadRecentes.delete(t + ':' + id);
+  opRenderDaqui();
+  toast(`Desfeito: ${r.nome} voltou para a lista do que comprar.`);
+}
+/* Não veio (Compras, em A caminho): tira a marca esquecida (só se no banco ela ainda for essa), com Desfazer. O Desfazer não
+   devolve a marca se a compra (reposição) do item entrou depois, ou se o estoque mudou: aqui (o que já chegou) e no banco (o que o
+   outro aparelho gravou e ainda não chegou aqui). */
+function cadNaoVeio(t, id) {
+  const col = cadColDe(t), r = byId(col, id);
+  if (!r || !r.pedidoEm) return opRenderDaqui();
+  const campo = t === 'ins' ? 'estoque' : 'estoqueG', ultimaDe = x => { const u = t === 'ins' ? ultimaReposicao(x) : ultimaCompra(id); return u ? u.id : ''; };
+  const antes = { em: r.pedidoEm, por: r.pedidoPor || '', n: r.pedidoN, est: num(r[campo]), u: ultimaDe(r) }, marca = marcaDesfazer();
+  tirarPedido(col, id, antes.em);
+  const g = cadGrupoAgora();
+  if (g) g.explicar = cadExplicarTirar(false);
+  opRenderDaqui();
+  avisoDesfazer(`${r.nome} voltou para a lista do que comprar.`, marca, () => {
+    const b = byId(col, id);
+    if (!b || b.pedidoEm || ultimaDe(b) !== antes.u || num(b[campo]) !== antes.est) return opJaMudou();
+    b.pedidoEm = antes.em; b.pedidoPor = antes.por;
+    if (typeof antes.n === 'number') b.pedidoN = antes.n;
+    put(col, b, { confere: { pedidoN: null, [campo]: antes.est } });
+    const gv = cadGrupoAgora();
+    if (gv) gv.explicar = recusas => { if (recusas.some(x => x.motivo !== 'mudou')) return false; toast(`Isto já mudou no outro aparelho: ${b.nome} não voltou para A caminho.`, 'warn'); return true; };
+    opRenderDaqui();
+    toast(`Desfeito: ${b.nome} voltou para A caminho.`);
+  });
+}
+/* Copiar lista: o texto para colar no WhatsApp do sócio ou do fornecedor (o que comprar, com a quantidade sugerida e a última
+   compra). Depois oferece "Marcar tudo como pedido". */
+function cadTextoLista(lista) {
+  const linha = m => {
+    const s = sugestaoCompra(m), fo = m.t === 'fil' && s.u ? byId('fornecedores', s.u.fornecedorId) : null;
+    return `• ${m.nome}: ${m.t === 'fil' ? gramas(s.q) : nf(s.q, 2) + ' ' + m.un}${s.u ? ` (última: ${brl(s.u.valor)}${fo ? ', ' + fo.nome : ''})` : ''}`;
+  };
+  const fs = lista.filter(m => m.t === 'fil'), is = lista.filter(m => m.t === 'ins');
+  return [`Lista de compras — ${S.perfil.empresa || 'Nexos'} (${dataBR(hoje())})`, fs.length ? 'Filamento\n' + fs.map(linha).join('\n') : '',
+    is.length ? 'Insumos\n' + is.map(linha).join('\n') : ''].filter(Boolean).join('\n\n');
+}
+async function cadCopiarLista() {
+  const lista = materiaisParaComprar().comprar.slice();
+  if (!lista.length) return toast('Nada para comprar agora.');
+  const txt = cadTextoLista(lista);
+  if (!(await copiarTexto(txt, false))) return cadMostrarLista(txt);
+  toast('Lista copiada. Cole no WhatsApp.', '', { rotulo: 'Marcar tudo como pedido', grupos: [], fn: () => cadMarcarTudo(lista) });
+}
+/* Sem área de transferência (navegador antigo ou bloqueado): o texto numa janela, para copiar à mão. */
+function cadMostrarLista(txt) {
+  abrirModal(`<p class="muted" style="margin-bottom:12px">Não deu para copiar sozinho. Copie o texto abaixo e cole no WhatsApp.</p>
+    <textarea id="cadListaTxt" readonly rows="10" aria-label="Lista de compras">${esc(txt)}</textarea>
+    <div class="actions"><button type="button" class="btn ghost" onclick="fecharModal()">Fechar</button><button type="button" class="btn" onclick="copiarTexto($('#cadListaTxt').value)">Copiar texto</button></div>`, { title: 'Lista de compras' });
+}
+/* Marcar tudo como pedido: cada marca numa gravação (um item que o outro aparelho excluiu fica de fora sozinho; os outros
+   entram, e o aviso conta os dois). O Desfazer também tira uma de cada vez, cada uma só se ainda for a deste aparelho. */
+function cadMarcarTudo(lista) {
+  const marca = marcaDesfazer(), quem = quemUsa(), feitos = [];
+  lista.forEach(m => { novoGrupo(); const em = marcarPedido(cadColDe(m.t), m.id, quem); if (em) feitos.push({ t: m.t, id: m.id, em }); });
+  if (!feitos.length) { opRenderDaqui(); return toast('Já estava tudo marcado como pedido.'); }
+  const grupos = FILA.filter(g => g.n > marca && g.ops.size);
+  const desfazer = () => {
+    const gs = [];
+    let n = 0;
+    feitos.forEach(x => {
+      novoGrupo();
+      if (!tirarPedido(cadColDe(x.t), x.id, x.em)) return;
+      n++; cadRecentes.delete(x.t + ':' + x.id);
+      const g = cadGrupoAgora();
+      if (g) gs.push(g);
+    });
+    const explicar = cadExplicarTirar(true, n);
+    gs.forEach(g => { g.explicar = explicar; });
+    opRenderDaqui();
+    toast(n ? `Desfeito: ${n === 1 ? '1 item voltou' : nf(n) + ' itens voltaram'} para a lista do que comprar.` : 'Isto já mudou depois. Nada foi desfeito.', n ? '' : 'bad');
+  };
+  const aviso = avisoDesfazer(`${feitos.length === 1 ? '1 item marcado' : nf(feitos.length) + ' itens marcados'} como pedido.`, marca, desfazer);
+  // a marca de um item não entrou (o outro aparelho o excluiu pouco antes): o aviso diz quantos foram marcados e qual ficou de fora,
+  // e o Desfazer continua para os que entraram
+  const explicar = (recusas, naTela) => {
+    const ok = feitos.length - recusas.length, nomes = cadJuntar(recusas.map(x => (x.d && x.d.nome) || '?')), varios = recusas.length > 1;
+    const fora = `${nomes} ficou${varios ? 'aram' : ''} de fora: outro aparelho ${recusas.every(x => x.motivo === 'apagado') ? 'excluiu' : 'mudou'} pouco antes.`;
+    if (ok <= 0) { toast(`Nada foi marcado como pedido. ${fora}`, 'warn'); return true; }
+    const aceitos = grupos.filter(g => !recusas.some(x => x.g === g));
+    toast(`${ok === 1 ? '1 item marcado' : nf(ok) + ' itens marcados'} como pedido. ${fora}`, 'warn', naTela ? { rotulo: 'Desfazer', grupos: aceitos, fn: desfazer } : undefined);
+    return true;
+  };
+  grupos.forEach(g => { g.explicar = explicar; });
+  feitos.forEach(x => cadRecentes.set(x.t + ':' + x.id, { em: x.em, tela: paginaAtual(), aviso }));
+  opRenderDaqui();
+}
+/* Chegou tudo (mais de um a caminho): uma compra de cada vez, cada janela já preenchida com a última; registrar uma abre a
+   próxima, e fechar a janela para por ali (o que faltou continua em A caminho). Abre só o que está em A caminho na tela (a linha
+   marcada agora há pouco, que ainda está no alto da lista, fica de fora), com a marca de cada um no toque. */
+let cadFilaChegou = [];
+function cadChegouTudo() {
+  const lista = materiaisParaComprar().caminho.filter(m => !cadRecente(m));
+  cadFilaChegou = lista.map((m, i) => ({ t: m.t, id: m.id, em: m.pedido.em, n: i + 1, de: lista.length }));
+  if (!cadFilaChegou.length) return opRenderDaqui();
+  cadProximoChegou(false);
+}
+/* depois = true: a janela abre logo depois de registrar a anterior (o 2º toque ou Enter de quem registrou não grava esta). O que
+   saiu de A caminho depois do toque em Chegou tudo (o outro aparelho registrou a chegada ou tirou a marca) fica de fora, com aviso:
+   nada entra em dobro. */
+function cadProximoChegou(depois = true) {
+  for (let x = cadFilaChegou.shift(); x; x = cadFilaChegou.shift()) {
+    if (!byId(cadColDe(x.t), x.id)) continue;
+    const saiu = cadSaiuDoCaminho(x.t, x.id, x.em);
+    if (saiu) { toast(`${saiu.txt} Esta compra ficou de fora, para não entrar em dobro.`, 'warn'); continue; }
+    const opc = { chegou: x.n + ' de ' + x.de, depois, em: x.em };
+    return x.t === 'ins' ? cadReporInsumo(x.id, opc) : cadNovaCompra(x.id, opc);
+  }
+}
+// ao trocar de tela, a linha marcada agora há pouco vai para A caminho
+DEPOIS_RENDER.push(trocou => { if (trocou) cadRecentes.clear(); });
+
+/* ---------- Acertar estoque (rolo, insumo e peça pronta): janela de um campo ----------
+   Um número grande (quanto tem de verdade), menos e mais e, no rolo, atalhos (acabou, ¼, ½, 1 e 2 rolos) e "pesei com o
+   carretel" (desconta o carretel vazio, lembrado neste aparelho). Na peça pronta, 1 campo no lugar dos 19 da janela do produto.
+   Usa a proteção da versão 16: o número digitado só vale se ninguém mexeu no estoque com a janela aberta (se mexeu, nada é
+   gravado e o aviso explica). Desfazer por 8 s volta o número de antes, se o estoque ainda estiver como o acerto deixou. A janela
+   lembra: perdeu na impressão é Falhou; chegou rolo é Comprei. */
+const CAD_ROLOS = [[0, 'acabou'], [250, '¼ de rolo'], [500, '½ rolo'], [1000, '1 rolo'], [2000, '2 rolos']];
+const cadAcerto = { passo: 1 };
+const cadDoTipo = t => (t === 'fil' ? ['filamentos', 'estoqueG', 2] : t === 'ins' ? ['insumos', 'estoque', 3] : ['produtos', 'estoque', 0]);
+const cadTxtEstoque = (t, r, v) => (t === 'fil' ? gramas(v) : t === 'ins' ? nf(v, 3) + ' ' + (r.unidade || 'un') : cadPlural(v, 'peça', 'peças'));
+/* O número do estoque na linha da tabela. No celular é um botão que abre o Acertar estoque (fica à vista, sem arrastar a tabela);
+   no computador é só o número, e o Acertar fica com os outros botões, à direita da linha: logo depois de salvar, o aviso aparece no
+   canto de baixo à esquerda e não fica em cima de botão nenhum. */
+const cadNumEstoque = (t, r, txt) => `<span class="cad-num-txt">${txt}</span><button type="button" class="cad-num" data-t="${t}" data-id="${esc(r.id)}" title="Acertar o estoque" onclick="cadAcertar(this.dataset.t, this.dataset.id)">${txt}</button>`;
+/* t: 'fil' | 'ins' | 'prod' */
+function cadAcertar(t, id) {
+  const [col, campo, casas] = cadDoTipo(t), r = byId(col, id);
+  if (!r) { toast('Este item não existe mais.', 'bad'); return render(); }
+  const atual = num(r[campo]), m = t === 'prod' ? null : situacaoMaterial(t, r), txt = v => cadTxtEstoque(t, r, v);
+  cadAcerto.passo = t === 'fil' ? 50 : 1;
+  const ponto = t === 'fil' ? cadPonto(r.cor) : `<span class="cad-ico">${icone(t === 'ins' ? 'insumos' : 'produtos')}</span>`;
+  const pergunta = t === 'fil' ? 'Quanto tem de verdade, em gramas?' : t === 'ins' ? `Quanto tem de verdade (${esc(r.unidade || 'un')})?` : 'Quantas peças prontas tem de verdade?';
+  const fichas = t === 'fil' ? `<div class="cad-fichas">${CAD_ROLOS.map(([v, l]) => `<button type="button" class="cad-ficha" onclick="setCampo('novo', ${v})">${l}</button>`).join('')}<button type="button" class="cad-ficha fraca" onclick="cadPesar()">pesei com o carretel</button></div><div id="cadBalanca" hidden></div>` : '';
+  openForm({
+    title: 'Acertar estoque', registro: [col, id], saveLabel: 'Salvar', foco: 'novo',
+    fields: [
+      { type: 'html', html: `<div class="cad-cab">${ponto}<b>${esc(r.nome)}</b><span>no sistema: ${esc(txt(atual))}${m && m.fila ? ' · a fila usa ' + esc(txt(m.fila)) : ''}</span></div>` },
+      { type: 'html', html: `<label class="cad-conta-rot" for="cadNovo">${pergunta}</label><div class="cad-conta"><button type="button" class="btn ghost" aria-label="Menos" onclick="cadPasso(-1)">−</button><input id="cadNovo" name="novo" type="text" inputmode="${t === 'prod' ? 'numeric' : 'decimal'}" autocomplete="off" data-num="1"${t === 'prod' ? ' data-int="1"' : ''} required value="${esc(paraCampo(atual))}"><button type="button" class="btn ghost" aria-label="Mais" onclick="cadPasso(1)">+</button></div>${fichas}` },
+    ],
+    preview: (d, form) => {
+      const el = campoDoForm(form, 'novo'), v = numTexto(el ? el.value : ''), dif = isFinite(v) ? arred(v - atual, casas) : 0;
+      const lembra = t === 'prod' ? 'Não é venda nem produção: só corrige a contagem.' : t === 'fil' ? 'Só corrige a contagem. Perdeu numa impressão? Use Falhou. Chegou rolo? Use Comprei.'
+        : 'Só corrige a contagem. Chegou mais? Use Repor.';
+      return `<p class="hint cad-dif">${dif ? `Diferença: <b>${dif > 0 ? '+' : '−'}${esc(txt(Math.abs(dif)))}</b>. ` : ''}${lembra}</p>`;
+    },
+    save: (d, form) => {
+      const a = byId(col, id), el = campoDoForm(form, 'novo'), v = numTexto(el ? el.value : '');
+      if (!a) { toast('Este item não existe mais.', 'bad'); return; }
+      if (!isFinite(v) || v < 0) { toast('Informe quanto tem.', 'bad'); return false; }
+      const novo = t === 'prod' ? Math.round(v) : arred(v, casas);
+      // o estoque mudou com a janela aberta (o outro aparelho acertou, vendeu, comprou...): nada é gravado (e o banco confere de
+      // novo, como na versão 16, o que ainda não chegou aqui)
+      if (num(a[campo]) !== atual) { toast(`Outro aparelho mudou o estoque de ${a.nome} enquanto esta janela estava aberta (agora: ${txt(num(a[campo]))}). Nada foi gravado: confira e acerte de novo, se ainda precisar.`, 'bad'); return; }
+      if (novo === atual) { toast(`Nada mudou: ${a.nome} continua com ${txt(novo)}.`); return; }
+      const marca = marcaDesfazer();
+      put(col, { ...a, [campo]: novo });
+      avisoDesfazer(`${a.nome}: agora tem ${txt(novo)}.`, marca, () => cadDesfazerAcerto(t, id, novo, atual));
+    },
+  });
+  cadTocarSeleciona(FORM.form);
+  // no celular o teclado numérico abre direto, com o número selecionado: é o único campo, e digitar troca o número (sem isso, o
+  // toque punha o cursor no meio dos dígitos e "1275" virava "1287075")
+  if ('ontouchstart' in window) { const el = campoDoForm(FORM.form, 'novo'); if (el) { el.focus(); el.select(); } }
+}
+function cadPasso(s) {
+  const el = FORM && campoDoForm(FORM.form, 'novo');
+  if (!el) return;
+  const v = numTexto(el.value);
+  setCampo('novo', Math.max(0, arred((isFinite(v) ? v : 0) + s * cadAcerto.passo, 3)));
+}
+/* Pesei com o carretel: o peso na balança menos o carretel vazio (o último usado fica lembrado neste aparelho). */
+const cadCarretel = () => { try { const v = num(localStorage.getItem('nexos-carretel')); return v > 0 ? v : 200; } catch (e) { return 200; } };
+function cadPesar() {
+  const b = $('#cadBalanca');
+  if (!b) return;
+  b.hidden = false;
+  b.innerHTML = `<div class="cad-balanca"><div><label for="cadB1">Na balança (g)</label><input id="cadB1" type="text" inputmode="decimal" autocomplete="off" data-num="1" oninput="cadPesou()"></div><span aria-hidden="true">−</span>
+    <div><label for="cadB2">Carretel vazio (g)</label><input id="cadB2" type="text" inputmode="decimal" autocomplete="off" data-num="1" value="${esc(paraCampo(cadCarretel()))}" oninput="cadPesou()"></div><span aria-hidden="true">=</span>
+    <div><span class="rotulo">Filamento</span><output id="cadB3">—</output></div></div>`;
+  $('#cadB1').focus();
+}
+function cadPesou() {
+  const a = num(($('#cadB1') || {}).value), c = num(($('#cadB2') || {}).value), g = Math.max(0, arred(a - c, 1));
+  if (!(a > 0)) { $('#cadB3').textContent = '—'; return; }
+  try { localStorage.setItem('nexos-carretel', String(c)); } catch (e) { /* sem armazenamento: vale só agora */ }
+  $('#cadB3').textContent = gramas(g);
+  setCampo('novo', g);
+}
+/* Desfazer do acerto: volta o número de antes, só se o estoque ainda estiver como o acerto deixou (aqui e no banco). */
+function cadDesfazerAcerto(t, id, novo, antes) {
+  const [col, campo] = cadDoTipo(t), b = byId(col, id);
+  if (!b || num(b[campo]) !== novo) return opJaMudou();
+  putConferindo(col, { ...b, [campo]: antes }, { [campo]: novo });
+  render();
+  toast(`Desfeito: ${b.nome} voltou para ${cadTxtEstoque(t, b, antes)}.`);
 }

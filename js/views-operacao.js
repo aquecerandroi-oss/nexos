@@ -288,12 +288,13 @@ function opPainelMetas(rv) {
     : '<p class="muted">Nenhuma meta definida. Escolha a meta de faturamento e a de lucro na <a href="#config">Configuração</a>.</p>';
   return `<div class="panel"${opNaGrade}><h2>Metas do mês</h2>${corpo}</div>`;
 }
-/* ---------- Painel: Precisa de atenção, Contas e Material acabando, com o botão que resolve ----------
+/* ---------- Painel: Precisa de atenção, Contas e O que comprar, com o botão que resolve ----------
    Os avisos são os de sempre (alertas(), em calc.js): os de ordem, manutenção, sugestão, estoque negativo e alíquota ficam em
-   Precisa de atenção (mais os orçamentos aprovados sem ordens); os de conta, em Contas; os de filamento e insumo, em Material
-   acabando. Cada linha tem o botão que resolve: Feito, Na frente, Pronto, Criar ordem, Produzir, Pagar e Receber (Feito,
-   Produzir, Pagar e Receber abrem as janelas de sempre); o resto abre a tela do aviso. No celular as listas ficam embaixo do
-   bloco, e três ícones no alto do Painel pulam até elas. */
+   Precisa de atenção (mais os orçamentos aprovados sem ordens); os de conta, em Contas; os de filamento e insumo (o alerta de
+   estoque e o mínimo), em O que comprar (cadListaComprar, em views-cadastros.js), que conta também a fila inteira. Cada linha tem
+   o botão que resolve: Feito, Na frente, Pronto, Criar ordem, Produzir, Pagar, Receber, Comprei e Repor (Feito, Produzir, Pagar,
+   Receber, Comprei e Repor abrem as janelas de sempre); o resto abre a tela do aviso. No celular as listas ficam embaixo do bloco,
+   e três ícones no alto do Painel pulam até elas. */
 const opListaAberta = {};                // "Ver mais" de cada lista (vale até recarregar)
 const opNoCelular = () => matchMedia('(max-width:860px)').matches;
 /* Mostra 5 (4 no celular); se só sobraria uma escondida, mostra todas. */
@@ -369,17 +370,6 @@ function opItensContas() {
         sub: `<span class="num${pagar ? '' : ' pos'}">${brl(c.valor)}</span> · ${esc(quando)}${cli ? ' · ' + esc(cli.nome) : ''}`, b: { rotulo: pagar ? 'Pagar' : 'Receber', fn: 'ctaPagar', id: c.id } };
     });
 }
-/* Filamento e insumo no limite do aviso (o mesmo de hoje: 200 g por padrão e o mínimo de cada insumo). */
-function opItensMaterial() {
-  return alertas().filter(a => a.k === 'filamento' || a.k === 'insumo').map(a => {
-    const fil = a.k === 'filamento', r = byId(fil ? 'filamentos' : 'insumos', a.id);
-    if (!r) return null;
-    const tem = num(fil ? r.estoqueG : r.estoque), acabou = tem <= 0;
-    return { tom: acabou ? 'bad' : 'warn', titulo: (fil ? cor(r.cor) : '') + esc(r.nome), link: a.pg,
-      sub: (acabou ? '<span class="neg">acabou</span>' : `<span class="aviso">tem ${fil ? gramas(tem) : nf(tem, 2) + ' ' + esc(r.unidade || 'un')}</span>`) +
-        (fil ? ` · aviso em ${gramas(S.config.alertaEstoque)}` : ` · mínimo ${nf(r.minimo, 2)}`) };
-  }).filter(Boolean).sort((a, b) => (a.tom === 'bad' ? 0 : 1) - (b.tom === 'bad' ? 0 : 1));
-}
 /* No celular as listas ficam embaixo do bloco: estes ícones pulam até elas. */
 function opIrBloco(id) {
   const b = document.getElementById(id);
@@ -413,16 +403,16 @@ function opAbrirVenda() {
 VIEWS.painel = function () {
   const mes = mesAtual(), rv = resumoVendas(vendasDoMes(mes)), fila = filaProducao();
   const prontas = soma(S.produtos, p => Math.max(0, num(p.estoque))), comEstoque = S.produtos.filter(p => num(p.estoque) > 0).length;
-  const atencao = opItensAtencao(), contas = opItensContas(), material = opItensMaterial();
+  const atencao = opItensAtencao(), contas = opItensContas(), comprar = materiaisParaComprar().comprar;
   const aPagar = contas.filter(x => x.pagar && x.st !== 'aberta');
-  const saltos = `<div class="op-saltos" role="group" aria-label="Ir para">${opSalto('op-atencao', 'falhas', 'Precisa de atenção', atencao.length, atencao.some(x => x.tom === 'bad'))}${opSalto('op-contas', 'contas', 'Contas', contas.length, contas.some(x => x.tom === 'bad'))}${opSalto('op-material', 'filamentos', 'Material acabando', material.length, material.some(x => x.tom === 'bad'))}</div>`;
+  const saltos = `<div class="op-saltos" role="group" aria-label="Ir para">${opSalto('op-atencao', 'falhas', 'Precisa de atenção', atencao.length, atencao.some(x => x.tom === 'bad'))}${opSalto('op-contas', 'contas', 'Contas', contas.length, contas.some(x => x.tom === 'bad'))}${opSalto('op-material', 'filamentos', 'O que comprar', comprar.length, comprar.some(m => m.nivel === 'falta' || m.nivel === 'acabou'))}</div>`;
   return `<div class="head op-head"><div><h1>Painel</h1><p>Resumo de ${esc(nomeMesLongo(mes))}</p></div><div class="head-acoes">${saltos}</div></div>` +
     (!S.filamentos.length && !S.produtos.length ? opPainelPassos() : '') +
     opBloco('painel') +
     `<div class="op-blocos"><div class="op-col">${opBlocoLista('op-atencao', 'Precisa de atenção', atencao, 'atencao', 'Tudo em dia.')}</div>
       <div class="op-col">${opBlocoLista('op-contas', 'Contas', contas, 'contas', 'Nada para pagar nos próximos 7 dias.',
         aPagar.length ? `<span class="txt-sm muted">até hoje: <b class="num">${brl(soma(aPagar, 'valor'))}</b></span>` : '<a class="link txt-sm" href="#contas">Ver todas</a>')}
-      ${opBlocoLista('op-material', 'Material acabando', material, 'material', 'Nenhum filamento ou insumo no limite do aviso.')}</div></div>
+      ${cadListaComprar('painel')}</div></div>
     <div class="cards">
       ${kpi('Faturamento do mês', brl(rv.bruto), opPl(rv.qtd, 'peça vendida', 'peças vendidas'))}
       ${kpi('Lucro do mês', brl(rv.lucro), 'margem ' + pct(rv.margem), rv.lucro > 0 ? 'pos' : rv.lucro < 0 ? 'neg' : '')}
@@ -1327,7 +1317,8 @@ function opExcluirHist(id) {
 
 /* ---------- A tela mudou pelo outro aparelho: os botões que mudaram esperam 1 s ----------
    Quando o que chega do outro aparelho muda um botão do bloco ou das listas do Painel (outra ordem imprimindo, outra próxima, uma
-   linha a mais ou a menos) ou o tira do lugar, por 1 s ele não vale: o toque de quem ia apertar o botão de antes cai no vazio, em
+   linha a mais ou a menos; também a lista O que comprar, no Painel e em Compras: o que o outro marcou como pedido sai da lista)
+   ou o tira do lugar, por 1 s ele não vale: o toque de quem ia apertar o botão de antes cai no vazio, em
    vez de fazer outra coisa (provado no estudo: 60 e 300 ms depois não valem, 1.300 ms vale). Vale também no desenho que acontece
    ao fechar uma janela (o que chegou com ela aberta, que a pessoa ainda não viu). Um botão igual e no mesmo lugar continua
    valendo. Não espera o desenho que este aparelho causou: uma ação (algo gravado aqui até 0,9 s antes), Ver mais, Mostrar as
