@@ -264,6 +264,58 @@ function filaProducao() {
     return { o, p, horas, inicio: new Date(ini), fim: new Date(fim), prazo: statusPrazo(o), estouraPrazo: !!o.prazo && dataLocal(new Date(fim)) > o.prazo };
   });
 }
+/* O que a fila ainda vai gastar (só leitura: nenhuma conta de custo ou de estoque muda). Cada ordem que está imprimindo ou na
+   fila, na ordem da fila, tira do estoque o peso cadastrado no produto: a de trás já vê o que as da frente vão usar.
+   gastoNaFila(produto, qtd, fil, ins) tira de fil e ins (o estoque que ainda sobra) o que esta ordem usa e devolve
+   { fils: [{ f, id, g, tem, falta }], ins: [{ i, id, q, tem, falta }] } (tem: o que sobrava antes dela; falta: o que não dá,
+   em gramas inteiros para cima ou na unidade do insumo; 0 quando dá). */
+function gastoNaFila(p, qtd, fil, ins) {
+  const r = { fils: [], ins: [] }, f = new Map(), n = new Map();
+  (p.materiais || []).forEach(m => f.set(m.filamentoId, num(f.get(m.filamentoId)) + num(m.pesoG) * num(qtd)));
+  (p.insumos || []).forEach(x => n.set(x.insumoId, num(n.get(x.insumoId)) + num(x.qtd) * num(qtd)));
+  f.forEach((g, id) => {
+    const x = byId('filamentos', id);
+    if (g <= 0) return;
+    const tem = x ? num(fil.get(id)) : 0;
+    if (x) fil.set(id, tem - g);
+    const falta = x ? g - Math.max(0, tem) : 0;
+    r.fils.push({ f: x || null, id, g, tem, falta: falta >= 0.5 ? Math.ceil(falta - 1e-9) : 0 });
+  });
+  n.forEach((q, id) => {
+    const x = byId('insumos', id);
+    if (q <= 0 || !x) return;
+    const tem = num(ins.get(id));
+    ins.set(id, tem - q);
+    const falta = q - Math.max(0, tem);
+    r.ins.push({ i: x, id, q, tem, falta: falta >= 0.005 ? arred(falta, 3) : 0 });
+  });
+  return r;
+}
+/* A fila inteira, na ordem dela: { fil, ins (o que sobra depois da fila), usaF, usaI (o que a fila usa de cada material),
+   por: ordemId -> gastoNaFila daquela ordem }. */
+function materialDaFila() {
+  return memo('material-fila', () => {
+    const fil = new Map(S.filamentos.map(f => [f.id, num(f.estoqueG)])), ins = new Map(S.insumos.map(i => [i.id, num(i.estoque)]));
+    const usaF = new Map(), usaI = new Map(), por = new Map();
+    filaProducao().forEach(({ o, p }) => {
+      const r = p ? gastoNaFila(p, num(o.qtd), fil, ins) : { fils: [], ins: [] };
+      r.fils.forEach(x => usaF.set(x.id, num(usaF.get(x.id)) + x.g));
+      r.ins.forEach(x => usaI.set(x.id, num(usaI.get(x.id)) + x.q));
+      por.set(o.id, r);
+    });
+    return { fil, ins, usaF, usaI, por };
+  });
+}
+/* Se esta ordem começasse agora: o estoque menos o que as ordens que já estão imprimindo ainda vão gastar (as da fila não
+   contam: ela passaria na frente delas). faltaParaIniciar: só os filamentos que não dão. */
+function gastoSeIniciar(o) {
+  const p = byId('produtos', o.produtoId);
+  if (!p) return { fils: [], ins: [] };
+  const fil = new Map(S.filamentos.map(f => [f.id, num(f.estoqueG)])), ins = new Map(S.insumos.map(i => [i.id, num(i.estoque)]));
+  S.ordens.filter(x => x.status === 'imprimindo' && x.id !== o.id).forEach(x => { const q = byId('produtos', x.produtoId); if (q) gastoNaFila(q, num(x.qtd), fil, ins); });
+  return gastoNaFila(p, num(o.qtd), fil, ins);
+}
+const faltaParaIniciar = o => gastoSeIniciar(o).fils.filter(x => x.falta);
 /* Ordens já impressas esperando o acabamento, as mais antigas primeiro. */
 const ordensEmAcabamento = () => S.ordens.filter(o => o.status === 'acabamento')
   .sort((a, b) => String(a.fimImpressaoEm || '').localeCompare(String(b.fimImpressaoEm || '')));
@@ -469,10 +521,16 @@ function codigoSugestao(produtoId) {
    do mouse enquanto chegava a ordem do outro aparelho) vale se for deste produto; senão, conta agora. */
 const codigoDaSugestao = (produtoId, cod) => (typeof cod === 'string' && ID_OK.test(cod) && /-\d+$/.test(cod) &&
   cod.startsWith('sg-' + String(produtoId || '').slice(-50) + '-') ? cod : codigoSugestao(produtoId));
-/* Quantas falhas a ordem já teve: a contagem dela (ordens.falhas) ou as falhas que apontam para ela, o que for maior. */
-const falhasDaOrdem = o => Math.max(0, Math.floor(num(o && o.falhas)), o ? S.falhas.filter(f => f.ordemId === o.id).length : 0);
-/* Falha de uma ordem: a ordem, o filamento perdido e quantas falhas ela já tinha quando a janela abriu (n). Os dois aparelhos
-   que registram a mesma falha chegam ao mesmo código; a perda de outro filamento da mesma ordem é outra falha e entra também.
+/* Quantas falhas a ordem já teve: a contagem dela (ordens.falhas) ou as falhas que apontam para ela, o que for maior. A perda de
+   dois filamentos na mesma falha (peça de duas cores, registrada de uma vez no Falhou) é uma falha só: as outras guardam o
+   código da primeira em "evento". */
+const falhasDaOrdem = o => Math.max(0, Math.floor(num(o && o.falhas)), o ? new Set(S.falhas.filter(f => f.ordemId === o.id).map(f => f.evento || f.id)).size : 0);
+/* O n do código da próxima falha de uma ordem: a contagem dela ou os registros de falha que apontam para ela, o que for maior
+   (contando cada filamento perdido, como a versão 17 conta). Assim uma aba que ainda está na versão 17 chega ao mesmo código
+   para a mesma falha, também depois de uma falha de duas cores, e ela não entra em dobro. */
+const nCodigoFalha = o => Math.max(0, Math.floor(num(o && o.falhas)), o ? S.falhas.filter(f => f.ordemId === o.id).length : 0);
+/* Falha de uma ordem: a ordem, o filamento perdido e o n de quando a janela abriu (nCodigoFalha). Os dois aparelhos que
+   registram a mesma falha chegam ao mesmo código; a perda de outro filamento da mesma ordem é outra falha e entra também.
    vistos: os códigos de falha que estavam na tela ao abrir a janela (o contador pula esses). */
 function codigoFalha(o, filamentoId, n, vistos) {
   const raiz = 'fa-' + String(o.id).slice(-24) + '-' + String(filamentoId || '').slice(-24) + '-';
@@ -543,18 +601,21 @@ function resumoFornecedores() {
 }
 
 /* ---------- Falhas e manutenção ---------- */
-/* d: { data, produtoId (opcional), filamentoId, gramas, motivo, obs, id e ordemId (opcionais) } — baixa o filamento perdido.
-   Falha de uma ordem: id fixo (codigoFalha) e a ordem que falhou. A contagem da ordem (ordens.falhas) sobe antes, num grupo
-   só dela e sem conferir a versão da ordem (putContagem): se o outro aparelho mexeu na ordem (voltou para a fila, mudou a
-   observação) ou até a excluiu, a falha e a baixa do filamento entram do mesmo jeito. */
+/* d: { data, produtoId (opcional), filamentoId, gramas, motivo, obs, id, ordemId e evento (opcionais) } — baixa o filamento
+   perdido. Falha de uma ordem: id fixo (codigoFalha) e a ordem que falhou. A contagem da ordem (ordens.falhas) sobe antes, num
+   grupo só dela e sem conferir a versão da ordem (putContagem): se o outro aparelho mexeu na ordem (voltou para a fila, mudou
+   a observação) ou até a excluiu, a falha e a baixa do filamento entram do mesmo jeito. evento: o código da primeira perda da
+   mesma falha (o outro filamento de uma peça de duas cores): a contagem da ordem não sobe de novo. contada: quem chamou já
+   subiu a contagem junto com a mudança da ordem (o Falhou que volta a ordem para a fila ou recomeça a impressão). */
 function registrarFalha(d) {
   const f = byId('filamentos', d.filamentoId), g = num(d.gramas);
   const o = d.ordemId ? byId('ordens', d.ordemId) : null;
-  if (o) { o.falhas = falhasDaOrdem(o) + 1; putContagem('ordens', o); }
+  if (o && !d.evento && !d.contada) { o.falhas = falhasDaOrdem(o) + 1; putContagem('ordens', o); }
   if (f && g > 0) { f.estoqueG = arred(num(f.estoqueG) - g, 2); put('filamentos', f); }
   return put('falhas', {
     id: d.id && ID_OK.test(String(d.id)) ? String(d.id) : uid(), data: d.data || hoje(), produtoId: d.produtoId || '', filamentoId: d.filamentoId || '', gramas: g,
     motivo: d.motivo || '', obs: d.obs || '', custo: f ? g / 1000 * num(f.precoKg) : 0, criadoEm: agoraISO(), ...(d.ordemId ? { ordemId: String(d.ordemId) } : {}),
+    ...(d.ordemId && d.evento && ID_OK.test(String(d.evento)) ? { evento: String(d.evento) } : {}),
   });
 }
 function excluirFalha(x) {
@@ -878,34 +939,37 @@ function historicoCliente(id) {
 }
 
 /* ---------- Avisos ---------- */
-/* Lista do que precisa de atenção: [{ tipo: 'bad' | 'warn', texto, pg }] */
+/* Lista do que precisa de atenção: [{ tipo: 'bad' | 'warn', texto, pg, k, id }]. k: o tipo do aviso e id: o registro dele (o
+   Painel põe em cada linha o botão que resolve): 'atrasada', 'hoje', 'estoura' (ordens), 'manut-vencida', 'manut-proxima'
+   (itens de manutenção), 'filamento', 'insumo', 'negativo' e 'minimo' (produtos), 'conta-vencida', 'conta-hoje', 'receber'
+   (contas) e 'aliquota'. */
 function alertas() {
   return memo('alertas' + new Date().toISOString().slice(0, 13), () => {   // refaz a cada hora, pois depende do relógio
     const a = [], c = S.config;
     S.ordens.filter(ORDEM_ABERTA).forEach(o => {
       const st = statusPrazo(o), nome = (byId('produtos', o.produtoId) || {}).nome || 'Produto excluído';
-      if (st === 'atrasada') a.push({ tipo: 'bad', texto: `Atrasada: ${num(o.qtd)}× ${nome} (prazo ${dataBR(o.prazo)})`, pg: 'producao' });
-      else if (st === 'hoje') a.push({ tipo: 'warn', texto: `Vence hoje: ${num(o.qtd)}× ${nome}`, pg: 'producao' });
+      if (st === 'atrasada') a.push({ tipo: 'bad', texto: `Atrasada: ${num(o.qtd)}× ${nome} (prazo ${dataBR(o.prazo)})`, pg: 'producao', k: 'atrasada', id: o.id });
+      else if (st === 'hoje') a.push({ tipo: 'warn', texto: `Vence hoje: ${num(o.qtd)}× ${nome}`, pg: 'producao', k: 'hoje', id: o.id });
     });
-    filaProducao().forEach(x => { if (x.estouraPrazo && x.prazo === 'ok') a.push({ tipo: 'warn', texto: `Pela fila, ${num(x.o.qtd)}× ${x.p ? x.p.nome : 'produto'} termina depois do prazo (${dataBR(x.o.prazo)})`, pg: 'producao' }); });
+    filaProducao().forEach(x => { if (x.estouraPrazo && x.prazo === 'ok') a.push({ tipo: 'warn', texto: `Pela fila, ${num(x.o.qtd)}× ${x.p ? x.p.nome : 'produto'} termina depois do prazo (${dataBR(x.o.prazo)})`, pg: 'producao', k: 'estoura', id: x.o.id }); });
     S.manutItens.forEach(i => {
       const s = statusManutencao(i);
-      if (s.estado === 'vencida') a.push({ tipo: 'bad', texto: `Manutenção vencida: ${i.nome} (${nf(s.usadoH)} h de ${nf(i.intervaloH)} h)`, pg: 'manutencao' });
-      else if (s.estado === 'proxima') a.push({ tipo: 'warn', texto: `Manutenção próxima: ${i.nome} (faltam ${nf(s.faltaH)} h)`, pg: 'manutencao' });
+      if (s.estado === 'vencida') a.push({ tipo: 'bad', texto: `Manutenção vencida: ${i.nome} (${nf(s.usadoH)} h de ${nf(i.intervaloH)} h)`, pg: 'manutencao', k: 'manut-vencida', id: i.id });
+      else if (s.estado === 'proxima') a.push({ tipo: 'warn', texto: `Manutenção próxima: ${i.nome} (faltam ${nf(s.faltaH)} h)`, pg: 'manutencao', k: 'manut-proxima', id: i.id });
     });
-    S.filamentos.forEach(f => { if (num(f.estoqueG) <= num(c.alertaEstoque)) a.push({ tipo: num(f.estoqueG) <= 0 ? 'bad' : 'warn', texto: `Filamento acabando: ${f.nome} (${gramas(f.estoqueG)})`, pg: 'filamentos' }); });
-    S.insumos.forEach(i => { if (num(i.minimo) > 0 && num(i.estoque) <= num(i.minimo)) a.push({ tipo: num(i.estoque) <= 0 ? 'bad' : 'warn', texto: `Insumo acabando: ${i.nome} (${nf(i.estoque, 2)} ${i.unidade || 'un'})`, pg: 'insumos' }); });
-    S.produtos.forEach(p => { if (num(p.estoque) < 0) a.push({ tipo: 'bad', texto: `Estoque negativo: ${p.nome} (${num(p.estoque)})`, pg: 'vendas' }); });
-    sugestoesProducao().forEach(s => a.push({ tipo: 'warn', texto: `Abaixo do mínimo: ${s.p.nome} (${nf(s.estoque)} de ${nf(s.minimo)}) — produzir ${nf(s.falta)}`, pg: 'producao' }));
+    S.filamentos.forEach(f => { if (num(f.estoqueG) <= num(c.alertaEstoque)) a.push({ tipo: num(f.estoqueG) <= 0 ? 'bad' : 'warn', texto: `Filamento acabando: ${f.nome} (${gramas(f.estoqueG)})`, pg: 'filamentos', k: 'filamento', id: f.id }); });
+    S.insumos.forEach(i => { if (num(i.minimo) > 0 && num(i.estoque) <= num(i.minimo)) a.push({ tipo: num(i.estoque) <= 0 ? 'bad' : 'warn', texto: `Insumo acabando: ${i.nome} (${nf(i.estoque, 2)} ${i.unidade || 'un'})`, pg: 'insumos', k: 'insumo', id: i.id }); });
+    S.produtos.forEach(p => { if (num(p.estoque) < 0) a.push({ tipo: 'bad', texto: `Estoque negativo: ${p.nome} (${num(p.estoque)})`, pg: 'vendas', k: 'negativo', id: p.id }); });
+    sugestoesProducao().forEach(s => a.push({ tipo: 'warn', texto: `Abaixo do mínimo: ${s.p.nome} (${nf(s.estoque)} de ${nf(s.minimo)}) — produzir ${nf(s.falta)}`, pg: 'producao', k: 'minimo', id: s.p.id }));
     S.contas.forEach(x => {
       if (x.pagoEm) return;
       const st = situacaoConta(x), desc = x.descricao || 'Conta';
       if (x.tipo === 'pagar') {
-        if (st === 'vencida') a.push({ tipo: 'bad', texto: `Conta vencida: ${desc} (${brl(x.valor)}, venceu ${dataBR(x.vencimento)})`, pg: 'contas' });
-        else if (st === 'hoje') a.push({ tipo: 'warn', texto: `Conta vence hoje: ${desc} (${brl(x.valor)})`, pg: 'contas' });
-      } else if (st === 'vencida') a.push({ tipo: 'warn', texto: `A receber atrasado: ${desc} (${brl(x.valor)}, desde ${dataBR(x.vencimento)})`, pg: 'contas' });
+        if (st === 'vencida') a.push({ tipo: 'bad', texto: `Conta vencida: ${desc} (${brl(x.valor)}, venceu ${dataBR(x.vencimento)})`, pg: 'contas', k: 'conta-vencida', id: x.id });
+        else if (st === 'hoje') a.push({ tipo: 'warn', texto: `Conta vence hoje: ${desc} (${brl(x.valor)})`, pg: 'contas', k: 'conta-hoje', id: x.id });
+      } else if (st === 'vencida') a.push({ tipo: 'warn', texto: `A receber atrasado: ${desc} (${brl(x.valor)}, desde ${dataBR(x.vencimento)})`, pg: 'contas', k: 'receber', id: x.id });
     });
-    if (!c.impostoConfirmado) a.push({ tipo: 'warn', texto: `Confirme com o contador a alíquota do Simples (hoje ${pct(c.imposto)})`, pg: 'config' });
+    if (!c.impostoConfirmado) a.push({ tipo: 'warn', texto: `Confirme com o contador a alíquota do Simples (hoje ${pct(c.imposto)})`, pg: 'config', k: 'aliquota', id: '' });
     return a;
   });
 }

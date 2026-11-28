@@ -308,15 +308,16 @@ function comNovaVenda(produtoId) {
       if (linhas.some(i => !Number.isInteger(i.qtd) || i.qtd < 1)) { toast('A quantidade de cada item precisa ser um número inteiro, a partir de 1.', 'bad'); return false; }
       if (!linhas.some(i => i.precoUnit > 0)) { toast('Informe o preço por unidade dos itens.', 'bad'); return false; }
       if (d.pagamento === 'receber' && !d.vencimento) { toast('Informe quando o cliente vai pagar (vencimento).', 'bad'); return false; }
-      // nada em dobro: pedido igual a um que acabou de entrar (aqui ou no outro aparelho) pergunta antes
-      const igual = registrarMesmoIgual ? null : pedidoIgualRecente({ clienteId: d.clienteId, itens: linhas });
+      // nada em dobro: pedido igual a um que acabou de entrar (aqui ou no outro aparelho) pergunta antes. Só com cliente: a venda
+      // sem cliente (a da feira, em que a mesma peça sai várias vezes seguidas) entra direto, sem pergunta (escolha do dono, 27/11).
+      const cli = byId('clientes', d.clienteId);
+      const igual = registrarMesmoIgual || !cli ? null : pedidoIgualRecente({ clienteId: cli.id, itens: linhas });
       registrarMesmoIgual = false;
       if (igual) { comPerguntarIgual(igual, () => { registrarMesmoIgual = true; FORM.form.requestSubmit(); }); return false; }
       const semPreco = [...new Set(linhas.filter(i => !(i.precoUnit > 0)).map(i => byId('produtos', i.produtoId).nome))];
       if (semPreco.length && !confirmar(`Sem preço: ${semPreco.join(', ')}.\n\n${semPreco.length === 1 ? 'Esse item entra' : 'Esses itens entram'} de graça no pedido. Registrar mesmo assim?`)) return false;
       const faltas = comFaltasEstoque(linhas);
       if (faltas.length && !confirmar(`Estoque insuficiente:\n${faltas.map(f => `• ${f.p.nome}: há ${nf(f.estoque)} em estoque e o pedido tem ${nf(f.qtd)}`).join('\n')}\n\nRegistrar mesmo assim? O estoque vai ficar negativo.`)) return false;
-      const cli = byId('clientes', d.clienteId);
       const v = registrarVenda({ data: d.data, canalId: d.canalId, frete: d.frete, clienteId: cli ? cli.id : '', obs: d.obs, itens: linhas.map(comItemPedido) });
       const receber = d.pagamento === 'receber' && num(v.bruto) > 0;
       if (receber) {
@@ -329,17 +330,17 @@ function comNovaVenda(produtoId) {
   });
   if (FORM && FORM.form) comMostrarVencimento(FORM.form, 'pagamento');
 }
-/* Pedido igual a um que acabou de entrar (mesmos produtos, quantidades e cliente): pergunta com botões grandes antes de
-   registrar outro. O Enter registra (como o OK que a pergunta substitui; na feira, a venda repetida segue com Enter) e "Não
-   registrar" fica embaixo, onde estava o Salvar no celular: o segundo toque de quem tocou duas vezes no Salvar não registra
-   em dobro. Não registrar avisa que nada entrou. */
+/* Pedido igual a um que acabou de entrar (mesmos produtos, quantidades e cliente; só pedido com cliente, porque a venda sem
+   cliente, a da feira, entra direto): pergunta com botões grandes antes de registrar outro. O cursor (e o Enter) fica em "Não
+   registrar", o botão vermelho, embaixo, onde estava o Salvar no celular: nem o segundo Enter nem o segundo toque de quem
+   apertou duas vezes no Salvar registram em dobro (escolha do dono, 27/11). Não registrar avisa que nada entrou. */
 function comPerguntarIgual(v, registrar) {
   const min = Math.round((Date.now() - Date.parse(v.criadoEm || '')) / 60000);
   const quando = !(min >= 1) ? 'agora há pouco' : 'há ' + comPlural(min, 'minuto', 'minutos');
   const titulo = comTituloPedido(v).replace(/^Pedido/, 'pedido');
   perguntar('Pedido igual', `Acabou de entrar o ${esc(titulo)} com os mesmos itens (${esc(resumoItensVenda(v))}, ${brl(v.bruto)})${v.clienteId ? ' para ' + nomeDe('clientes', v.clienteId) : ''}, registrado ${quando}. Registrar mais um?`, [
-    { rotulo: 'Registrar mais um', fn: registrar, foco: true },
-    { rotulo: 'Não registrar', cls: '', fn: () => { if (FORM) FORM.sujo = false; fecharForm(); toast(`Nada foi registrado. Fica só o ${titulo}, que já tinha entrado.`); } },
+    { rotulo: 'Registrar mais um', fn: registrar },
+    { rotulo: 'Não registrar', cls: '', foco: true, fn: () => { if (FORM) FORM.sujo = false; fecharForm(); toast(`Nada foi registrado. Fica só o ${titulo}, que já tinha entrado.`); } },
   ]);
 }
 

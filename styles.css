@@ -436,7 +436,180 @@ body.modal-aberto .versao-nova{display:none}
   .doc th,.doc-logo{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
 
+/* ---------- Agora na impressora: Próxima > Na impressora > Em acabamento (Painel e Produção) ---------- */
+.op-agora{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) minmax(0,1fr);gap:20px;margin-bottom:18px;align-items:stretch}
+.op-agora.dois{grid-template-columns:minmax(0,1fr) minmax(0,1.7fr)}
+.op-agora.sem-prox{grid-template-columns:minmax(0,1.7fr) minmax(0,1fr)}
+.op-agora.sem-prox.dois{grid-template-columns:minmax(0,1fr)}
+.op-card{position:relative;display:flex;flex-direction:column;min-width:0;padding:13px 16px 15px;border-radius:var(--raio);border:1px solid var(--line);
+  background:linear-gradient(180deg,rgba(255,255,255,.028),rgba(255,255,255,.006) 160px),var(--panel);box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 14px 40px rgba(0,0,0,.32);transition:border-color .25s}
+.op-card:hover{border-color:rgba(255,255,255,.11)}
+.op-card.foco{background:radial-gradient(130% 110% at 50% 0%,rgba(227,24,45,.15),transparent 62%),linear-gradient(180deg,#17171c,#0e0e12);border-color:rgba(255,59,78,.34);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 18px 44px rgba(0,0,0,.5),0 0 34px rgba(227,24,45,.13)}
+.op-card.foco::before{content:"";position:absolute;left:22px;right:22px;top:-1px;height:2px;border-radius:2px;background:linear-gradient(90deg,transparent,var(--red2),transparent);box-shadow:0 0 16px rgba(255,59,78,.85)}
+/* seta cromada entre os cartões: o caminho da peça */
+.op-card + .op-card::after{content:"";position:absolute;left:-16px;top:50%;width:11px;height:20px;margin-top:-10px;background:var(--metal-red);opacity:.85;
+  clip-path:polygon(0 0,35% 0,100% 50%,35% 100%,0 100%,62% 50%);filter:drop-shadow(0 0 6px rgba(255,59,78,.6))}
+.op-top{display:flex;align-items:center;gap:8px;min-height:32px;margin-bottom:7px}
+.op-rot{flex:1;min-width:0;font:650 10.5px/1.3 var(--titulo);text-transform:uppercase;letter-spacing:.13em;color:var(--muted)}
+.op-card.foco .op-rot{color:var(--red3)}
+.op-quem{display:flex;gap:12px;align-items:center;min-width:0}
+.op-quem > div{min-width:0;flex:1}
+.op-foto{width:50px;height:50px;flex:none;border-radius:11px;object-fit:cover;display:grid;place-items:center;background:radial-gradient(circle at 35% 25%,#2c2c34,#17171c 70%);border:1px solid var(--line2)}
+.op-foto.pq{width:38px;height:38px;border-radius:9px}
+.op-foto.vazia{color:var(--c,#888)} .op-foto.vazia .ic{width:46%;height:46%;opacity:1;filter:drop-shadow(0 0 5px rgba(255,255,255,.14))}
+img.op-foto:not([src]){visibility:hidden}
+.op-peca{display:flex;gap:16px;align-items:center;min-height:126px}
+.op-peca-t{flex:1;min-width:0}
+/* a peça aparece de baixo para cima, como sai da impressora: a parte já feita fica acesa */
+.op-viva{position:relative;flex:none;width:106px;height:106px;border-radius:13px;overflow:hidden;background:#15151a;border:1px solid var(--line2)}
+.op-viva img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.op-viva img:not(.acesa){filter:grayscale(1) brightness(.34)}
+.op-viva img.acesa{clip-path:inset(calc(100% - var(--p)) 0 0 0)}
+.op-viva img:not([src]){visibility:hidden}
+.op-viva > i{position:absolute;left:0;right:0;bottom:var(--p);height:2px;background:linear-gradient(90deg,transparent,var(--red2) 20%,var(--red2) 80%,transparent);box-shadow:0 0 12px rgba(255,59,78,.9)}
+.op-viva > i::after{content:"";position:absolute;top:-3px;left:0;width:18px;height:8px;border-radius:50%;background:radial-gradient(closest-side,#fff,rgba(255,59,78,.5) 60%,transparent);animation:op-bico 2.6s ease-in-out infinite alternate}
+@keyframes op-bico{from{transform:translateX(0)}to{transform:translateX(88px)}}
+.op-cubo{position:absolute;inset:0;display:grid;place-items:center} .op-cubo .ic{width:42px;height:42px}
+button.op-nome{display:block;background:none;border:0;color:inherit;padding:0;text-align:left;cursor:pointer;font:700 16px/1.24 var(--titulo);letter-spacing:.005em;overflow-wrap:anywhere}
+.op-card.foco button.op-nome{font-size:19px}
+.op-card.foco button.op-nome.menor,#op-prox button.op-nome{font-size:15.5px}
+button.op-nome:hover{text-decoration:underline;text-decoration-color:var(--red2);text-underline-offset:3px}
+.op-sub{color:var(--muted);font-size:12.5px;margin-top:2px;overflow-wrap:anywhere}
+.op-uma{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.op-linha-sub{display:flex;flex-wrap:wrap;gap:2px 8px;align-items:center}
+.op-tempo{display:flex;justify-content:space-between;align-items:baseline;gap:2px 12px;flex-wrap:wrap;margin:8px 0 6px}
+.op-tempo b{font:700 23px/1.08 var(--titulo);font-variant-numeric:tabular-nums}
+.op-tempo span{color:var(--text2);font-size:13px;font-variant-numeric:tabular-nums}
+.op-tempo.passou b{color:var(--warn);text-shadow:0 0 20px rgba(240,180,41,.25)}
+.op-card .meter{height:9px}
+.op-i{width:17px;height:17px;flex:none;display:block}
+.op-fios{display:flex;flex-wrap:wrap;gap:5px 6px;margin-top:8px}
+.op-fio{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;border:1px solid var(--line2);border-radius:999px;padding:1px 10px 1px 8px;font-size:12px;line-height:1.5;color:var(--text2);background:rgba(255,255,255,.022)}
+.op-fio .n{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.op-fio .dot{margin-right:5px;vertical-align:-1px}
+.op-fio b{font-variant-numeric:tabular-nums;white-space:nowrap}
+.op-fio .op-i{width:13px;height:13px;color:var(--ok)}
+.op-fio.falta{border-color:rgba(255,90,103,.55);color:#ffd9dc;background:rgba(255,90,103,.07)}
+.op-fio.falta em{font-style:normal;font-weight:650;color:var(--bad);white-space:nowrap}
+.op-fio.sem{color:var(--muted)} .op-fio.sem em{font-style:normal;color:var(--warn);white-space:nowrap}
+.op-fio.leve{border-color:rgba(240,180,41,.45);color:var(--warn);background:rgba(240,180,41,.06)}
+#op-prox .op-fios,.op-mat .op-fios,.op-esc .op-fios{flex-direction:column;align-items:flex-start;gap:1px}
+#op-prox .op-fio,.op-mat .op-fio,.op-esc .op-fio{border:0;background:none;padding:0;font-size:12.5px}
+.op-marcas{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
+.op-acoes{padding-top:12px;display:grid;gap:8px}
+.op-acoes.fim{margin-top:auto}
+.op-btn{min-height:58px;flex-direction:column;gap:2px;padding:8px 16px;border-radius:12px;white-space:normal;text-align:center;font:700 16.5px/1.2 var(--titulo)}
+.op-btn small{display:block;font:500 12px/1.3 "Segoe UI",system-ui,sans-serif;opacity:.93;letter-spacing:0;text-wrap:balance}
+.op-sec{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px}
+.op-sec .btn{min-height:40px;padding:6px 10px}
+.op-depois{list-style:none;margin:9px 0 0;padding:7px 0 0;border-top:1px solid rgba(255,255,255,.06);font-size:12.5px;color:var(--text2)}
+.op-depois li{display:flex;gap:10px;justify-content:space-between;padding:1.5px 0}
+.op-depois li span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.op-depois em{font-style:normal;flex:none;font-size:12px}
+.op-ver{display:inline-block;color:var(--text2);font-weight:600;font-size:12.5px;text-decoration:none;padding:2px 0}
+.op-ver:hover{color:#fff;text-decoration:underline}
+#op-emacab > .op-ver{margin-top:auto;padding-top:8px}
+.op-ver-cel{display:none}
+.em-producao .op-depois{display:none}
+.op-alerta{display:flex;gap:9px;align-items:center;flex-wrap:wrap;border:1px solid rgba(240,180,41,.4);background:rgba(240,180,41,.06);color:#f6d98f;border-radius:11px;padding:8px 11px;font-size:12.5px;line-height:1.4}
+.op-alerta > .op-i{color:var(--warn)} .op-alerta > div{flex:1 1 180px;min-width:0}
+.op-alerta-b{display:flex;gap:6px}
+.op-vazio{color:var(--muted);padding:6px 0 2px}
+.op-var{display:grid;gap:12px}
+.op-var > div + div{border-top:1px solid rgba(255,255,255,.07);padding-top:12px}
+.op-var .op-tempo b{font-size:19px}
+.op-var .op-sec{margin-top:10px}
+.op-ac{list-style:none;margin:0;padding:0}
+.op-ac li{padding:9px 0;border-bottom:1px solid rgba(255,255,255,.06);display:grid;gap:7px}
+.op-ac li > div:first-child > b{font:650 14.5px/1.3 var(--titulo)}
+.op-ac li:first-child{padding-top:0} .op-ac li:last-child{border-bottom:0;padding-bottom:0}
+.op-bts{display:flex;gap:6px;align-items:center}
+.op-bts .btn{flex:1;min-height:37px;padding:5px 13px}
+/* botão só de ícone: Mais opções */
+.op-ic{width:32px;height:32px;display:inline-grid;place-items:center;padding:0;border-radius:8px;border:1px solid var(--line2);background:none;color:var(--muted);cursor:pointer;flex:none;transition:color .15s,border-color .15s,background .15s}
+.op-ic:hover,.op-ic:focus-visible{color:#fff;border-color:rgba(255,59,78,.6);background:rgba(227,24,45,.09)}
+.op-bts .op-ic{width:37px;height:37px}
+/* a tela mudou pelo outro aparelho: o botão do bloco ou das listas que mudou (ou saiu do lugar) espera 1 s */
+.op-acao.op-espera{pointer-events:none;filter:saturate(.35) brightness(.75)}
+/* Qual vem agora? (Escolher outra) */
+.op-escolhas{display:grid;gap:8px}
+.op-esc{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center;text-align:left;width:100%;min-height:58px;border:1px solid var(--line2);border-radius:12px;padding:9px 12px;background:rgba(255,255,255,.025);color:var(--text);font:inherit;cursor:pointer}
+.op-esc:hover,.op-esc:focus-visible{border-color:rgba(255,59,78,.6);background:rgba(227,24,45,.07)}
+.op-esc-t{min-width:0} .op-esc-t > b,.op-esc-t > .op-sub{display:block}
+.op-esc-selos{display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+/* Produção: o filamento de cada ordem da fila. O nome (com o ponto da cor) fica numa linha e o peso e o "falta" descem para a de
+   baixo quando falta espaço: a coluna não empurra os botões da linha para fora (a tabela cabe inteira a partir de 1240 px, como
+   na versão 17, e no celular o arrasto até o Iniciar não aumenta) */
+.op-mat .op-fio{display:block;white-space:normal}
+.op-mat .op-fio .n{display:inline;overflow:visible}
+.op-mat .op-fio .dot{width:9px;height:9px;margin-right:4px}
+.op-mat .op-fio b{margin-left:2px}
+.op-mat .op-fio .op-i{display:inline-block;vertical-align:-2px;margin-left:3px}
+#op-fila th,#op-fila td{padding-left:8px;padding-right:8px}
+#op-fila td.op-mat{padding-left:6px;padding-right:6px}
+
+/* ---------- Painel: listas com o botão que resolve ---------- */
+.op-saltos{display:none}
+.op-blocos{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:14px;margin-bottom:18px;align-items:start}
+.op-col{display:grid;gap:14px;min-width:0}
+.op-bloco.panel{display:flex;flex-direction:column;min-width:0;margin:0;padding:14px 17px 15px}
+.op-bloco .panel-head{margin-bottom:9px;flex-wrap:nowrap;min-height:24px}
+.op-bloco .panel-head h2 small{color:var(--muted);font:600 13px/1 var(--titulo);margin-left:6px}
+.op-bloco .panel-head h2 small.neg{color:var(--bad)}
+.op-lista{list-style:none;margin:0;padding:0}
+.op-lista li{position:relative;display:flex;align-items:center;gap:10px;padding:7px 0 7px 13px;border-bottom:1px solid rgba(255,255,255,.05);min-height:51px}
+.op-lista li:first-child{padding-top:2px} .op-lista li:last-child{border-bottom:0}
+.op-lista li::before{content:"";position:absolute;left:0;top:11px;bottom:11px;width:3px;border-radius:3px;background:rgba(255,255,255,.14)}
+.op-lista li:first-child::before{top:5px}
+.op-lista li.bad::before{background:var(--bad);box-shadow:0 0 10px rgba(255,90,103,.55)}
+.op-lista li.warn::before{background:var(--warn);box-shadow:0 0 8px rgba(240,180,41,.3)}
+.op-t{flex:1;min-width:0}
+.op-t b{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.28}
+.op-t small{display:block;color:var(--muted);font-size:12px;line-height:1.35}
+.op-t small .neg{color:var(--bad)} .op-t small .pos{color:var(--ok)} .op-t small .aviso{color:var(--warn)}
+.op-lista .btn.sm{flex:none;padding:6px 11px;font-size:12.5px;min-height:33px}
+/* "Ver mais": no computador no alto da lista, à direita (logo depois de uma ação o aviso fica no canto de baixo à esquerda, e o
+   segundo clique não cai no botão da linha que aparece); no celular, embaixo e à esquerda (ver Telas menores) */
+.op-dir{display:flex;align-items:center;gap:12px;flex:none}
+.op-mais-topo{background:none;border:0;color:var(--text2);font:600 12.5px/1 "Segoe UI",system-ui,sans-serif;padding:5px 0;cursor:pointer;white-space:nowrap}
+.op-mais-topo:hover{color:#fff;text-decoration:underline}
+.op-mais{display:none;align-self:flex-start;background:none;border:0;color:var(--text2);font:600 12.5px/1 "Segoe UI",system-ui,sans-serif;padding:11px 0 0;cursor:pointer}
+.op-mais:hover{color:#fff;text-decoration:underline}
+.op-certo{display:flex;align-items:center;gap:10px;color:var(--text2);padding:14px 0} .op-certo .op-i{color:var(--ok);width:22px;height:22px}
+
+/* ---------- Falhou em 3 toques ---------- */
+.op-chips{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.op-chips.tres{grid-template-columns:repeat(3,minmax(0,1fr))}
+.op-chip{min-height:44px;border-radius:10px;border:1px solid var(--line2);background:rgba(255,255,255,.03);color:var(--text);font:600 13.5px/1.2 "Segoe UI",system-ui,sans-serif;padding:7px 10px;cursor:pointer;text-align:center;transition:border-color .15s,background .15s}
+.op-chip small{display:block;color:var(--muted);font-weight:400;font-size:11.5px;margin-top:2px}
+.op-chip:hover{border-color:rgba(255,59,78,.6);background:rgba(227,24,45,.07)}
+.op-chip.on{border-color:var(--red2);background:linear-gradient(180deg,rgba(227,24,45,.34),rgba(227,24,45,.16));color:#fff;box-shadow:0 0 0 1px rgba(255,59,78,.4),0 6px 18px rgba(227,24,45,.18)}
+.op-chip.on small{color:#ffd0d4}
+.op-chips.erro .op-chip{border-color:rgba(255,90,103,.7);animation:op-treme .3s}
+@keyframes op-treme{25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+.op-perdas{display:grid;gap:8px;margin-top:8px}
+.op-perda{display:grid;grid-template-columns:minmax(0,1fr) 118px;gap:10px;align-items:center}
+.op-un{position:relative} .op-un input{padding-right:30px;text-align:right;font-variant-numeric:tabular-nums}
+.op-un::after{content:attr(data-un);position:absolute;right:11px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+.op-rot2{font-size:12px;color:var(--muted);margin:2px 0 6px}
+.op-det summary{cursor:pointer;color:var(--muted);font-size:12.5px;padding:4px 0;list-style-position:inside} .op-det summary:hover{color:var(--text)} .op-det .grid{margin-top:8px}
+form.op-falha .actions > .btn.ghost:not(.op-manter){display:none}
+form.op-falha > .actions{display:grid;grid-template-columns:1fr 1fr 1.3fr;gap:8px}
+form.op-falha .actions .btn{min-height:50px}
+form.op-falha .op-rodape{grid-column:1/-1;color:var(--muted);font-size:12px;margin-bottom:-2px}
+
 /* ---------- Telas menores ---------- */
+@media (min-width:861px) and (max-width:1240px){ .op-blocos{grid-template-columns:minmax(0,1fr)} }
+/* Próxima e Na impressora lado a lado (no caminho da peça) e Em acabamento embaixo, inteiro, com os botões à direita: logo depois
+   de uma ação o aviso (no canto de baixo à esquerda) não cobre botão do bloco */
+@media (min-width:861px) and (max-width:1120px){
+  .op-agora{grid-template-columns:minmax(0,1fr) minmax(0,1.6fr)}
+  .op-agora.sem-prox{grid-template-columns:minmax(0,1fr)}
+  .op-agora #op-emacab{grid-column:1/-1} #op-emacab::after{display:none}
+  #op-emacab .op-ac li{grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 14px}
+  #op-emacab > .op-ver{align-self:flex-end} #op-emacab > .op-acoes{justify-items:end}
+}
 @media (max-width:1100px){ main{padding:24px 22px 64px} }
 @media (max-width:860px){
   #app{flex-direction:column}
@@ -524,6 +697,51 @@ body.modal-aberto .versao-nova{display:none}
   .side-foot{position:static;box-shadow:none}
   .side nav{gap:0}
   .side .nav-g{padding:6px 12px 2px}
+  /* o bloco em cartões, um embaixo do outro: o que imprime primeiro, depois o acabamento e a próxima (na Produção a fila logo
+     embaixo já mostra a próxima) */
+  .op-agora,.op-agora.dois,.op-agora.sem-prox,.op-agora.sem-prox.dois{grid-template-columns:minmax(0,1fr);gap:12px;margin-bottom:12px}
+  .op-card{padding:12px 14px 15px}
+  .op-card.foco{order:-2} .op-agora.tem-acab #op-emacab{order:-1}
+  .op-agora.em-producao #op-prox{display:none}
+  .op-card + .op-card::after{display:none}
+  button.op-nome{min-height:44px;display:flex;align-items:center}
+  .op-card.foco button.op-nome{font-size:17px;letter-spacing:-.01em}
+  .op-peca{min-height:118px;gap:14px} .op-viva{width:96px;height:96px}
+  .op-tempo{margin:7px 0 6px}
+  #op-imp .op-btn{min-height:72px}
+  .op-btn{min-height:64px;font-size:17px} .op-btn small{font-size:12.5px}
+  .op-sec .btn{min-height:50px;font-size:14.5px}
+  .op-ic,.op-bts .op-ic{width:46px;height:46px}
+  .op-ac li{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;align-items:center}
+  .op-bts{gap:8px} .op-bts .btn{flex:none;min-height:48px;padding:8px 18px;font-size:14.5px}
+  #op-prox.ocupada .op-acoes .op-sec{display:none}
+  .op-ver{min-height:44px;display:inline-flex;align-items:center} #op-prox .op-acoes{padding-top:4px}
+  .op-depois{display:none} .op-ver-cel{display:block}
+  .op-alerta-b{flex-basis:100%} .op-alerta-b .btn{flex:1}
+  .op-esc{grid-template-columns:auto minmax(0,1fr)} .op-esc-selos{grid-column:2;flex-direction:row;flex-wrap:wrap;align-items:center} .op-esc-selos:empty{display:none}
+  .op-mat .op-fio{font-size:12px}
+  /* Painel: as listas em cartões; os ícones no alto pulam até elas. Os ícones ficam no fim do título, abaixo da faixa que o aviso
+     ocupa logo depois de uma ação (ele fica no alto, ao lado do botão do menu, e chega a 3 linhas) */
+  .op-head{position:relative}
+  .op-head > div:first-child{padding-right:138px}
+  .op-head .head-acoes{position:absolute;right:-4px;bottom:-11px}
+  .op-saltos{display:flex;gap:2px}
+  .op-salto{position:relative;width:46px;height:44px;display:grid;place-items:center;background:none;border:0;color:var(--text2);border-radius:12px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .op-salto:active{background:rgba(227,24,45,.16)}
+  .op-salto .ic{width:22px;height:22px} .op-salto .pill{position:absolute;top:1px;right:1px;animation:none} .op-salto .pill.calma{background:linear-gradient(180deg,#5a5a64,#34343b)}
+  .op-blocos,.op-col{grid-template-columns:minmax(0,1fr);gap:12px}
+  .op-blocos{margin-bottom:12px}
+  .op-bloco.panel{padding:14px 14px 15px}
+  .op-lista li{min-height:60px} .op-t small{font-size:12.5px}
+  .op-lista .btn.sm{min-height:44px}
+  .op-mais-topo{display:none}
+  .op-mais{display:block;min-height:46px;font-size:13.5px;padding:4px 0 0;margin-bottom:-8px}
+  /* Falhou */
+  .op-chips{grid-template-columns:1fr 1fr} .op-chips.tres{grid-template-columns:repeat(3,minmax(0,1fr))} .op-chips.tres .op-chip{font-size:13.5px;padding:7px 5px}
+  .op-chip{min-height:50px;font-size:14.5px}
+  .op-perda{grid-template-columns:minmax(0,1fr) 112px}
+  .op-det summary{padding:12px 0;font-size:14px;line-height:20px}
+  form.op-falha > .actions{grid-template-columns:1fr 1fr} form.op-falha .actions > .btn[type=submit]{grid-column:1/-1;order:-1;min-height:58px} form.op-falha .op-rodape{order:-2}
 }
 @keyframes sobe-rodape{from{opacity:0;transform:translateY(40px)}}
 @keyframes toast-desce{from{opacity:0;transform:translateY(-20px) scale(.96)}}

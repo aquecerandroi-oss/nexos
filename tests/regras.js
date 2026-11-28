@@ -689,15 +689,15 @@
     await pausa();
   });
   await tenta(['ordem igual: a janela pergunta com botões grandes, no lugar dela, antes de criar',
-    'ordem igual: o cursor começa em "Criar mais uma" (o Enter cria, como o OK) e "Não criar" é o último botão (no celular, onde estava o Salvar)',
+    'ordem igual: o cursor começa em "Não criar", o último botão (no celular, onde estava o Salvar): o Enter não cria em dobro',
     'ordem igual: fechar a pergunta volta para a janela como estava', 'ordem igual: "Não criar" fecha a janela e avisa que nada entrou', 'ordem igual: "Criar mais uma" cria'], async () => {
     opNovaOrdem('prod-e1', '', 4);
     $('#modal form').requestSubmit();
     await pausa(100);
     const p = $('#modal .caixa.pergunta'), bs = p ? $$('.pergunta-botoes .btn', p) : [];
     ok('ordem igual: a janela pergunta com botões grandes, no lugar dela, antes de criar', !!p && $('#modal form').hidden && bs.length === 2 && S.ordens.filter(o => o.produtoId === 'prod-e1' && num(o.qtd) === 4).length === 1, !!p);
-    ok('ordem igual: o cursor começa em "Criar mais uma" (o Enter cria, como o OK) e "Não criar" é o último botão (no celular, onde estava o Salvar)',
-      document.activeElement === bs[0] && /Criar mais uma/.test(bs[0].textContent) && /Não criar/.test((bs[1] || {}).textContent || ''), [document.activeElement && document.activeElement.textContent, bs.map(b => b.textContent)]);
+    ok('ordem igual: o cursor começa em "Não criar", o último botão (no celular, onde estava o Salvar): o Enter não cria em dobro',
+      document.activeElement === bs[1] && /Criar mais uma/.test(bs[0].textContent) && /Não criar/.test((bs[1] || {}).textContent || ''), [document.activeElement && document.activeElement.textContent, bs.map(b => b.textContent)]);
     responder(-1);
     ok('ordem igual: fechar a pergunta volta para a janela como estava', !$('#modal .caixa.pergunta') && !$('#modal form').hidden && $('#modal [name=qtd]').value === '4', 0);
     $('#modal form').requestSubmit();
@@ -716,11 +716,13 @@
   });
   const confirmarDeVerdade = window.confirm, perguntas32 = [];
   let respostaConfirmar = true;
+  // a ordem começou a imprimir há 10 minutos (desde a etapa 2, Concluir uma ordem iniciada há menos de 2 minutos pergunta antes)
+  const iniciadaHa10 = o => { iniciarOrdem(o); o.inicio = new Date(Date.now() - 10 * 60000).toISOString(); put('ordens', o); };
   window.confirm = m => { perguntas32.push(String(m)); return respostaConfirmar; };     // as perguntas do navegador nesta seção
   await tenta(['Desfazer: o Concluir mostra o botão Desfazer no aviso', 'Desfazer: com outra ordem imprimindo, pergunta antes de pôr as duas imprimindo (como o Iniciar)',
     'Desfazer: o banco volta exatamente ao que era, com a mesma hora de início',
     'Desfazer: se o outro aparelho mudou a ordem depois, nada é desfeito e o aviso explica', 'Desfazer: gravação recusada leva junto o aviso de sucesso e o Desfazer'], async () => {
-    const o = novaOrdem({ produtoId: 'prod-e1b', qtd: 3 }); iniciarOrdem(o);
+    const o = novaOrdem({ produtoId: 'prod-e1b', qtd: 3 }); iniciadaHa10(o);
     await pausa();
     const antes = bancoTexto(), inicio = byId('ordens', o.id).inicio;
     opConcluir(o.id);
@@ -742,7 +744,7 @@
     b2.click();
     await pausa(300);
     ok('Desfazer: se o outro aparelho mudou a ordem depois, nada é desfeito e o aviso explica', bancoTexto() === antes2 && avisos32().some(t => /Isto já mudou depois\. Nada foi desfeito\./.test(t)), avisos32().slice(-2));
-    const o3 = novaOrdem({ produtoId: 'prod-e1b', qtd: 1 }); iniciarOrdem(o3);
+    const o3 = novaOrdem({ produtoId: 'prod-e1b', qtd: 1 }); iniciadaHa10(o3);
     await pausa();
     const l3 = DBDemo._ler().linhas['ordens/' + o3.id];
     outroPC([{ n: 16, ops: [{ c: 'ordens', i: o3.id, t: 'mudar', se: l3.v, p: [{ s: { status: 'concluido', fim: hoje() } }] }] }]);
@@ -752,7 +754,7 @@
     ok('Desfazer: gravação recusada leva junto o aviso de sucesso e o Desfazer', tinha === 1 && !$$('#toasts .toast.com-acao').length && avisos32().some(t => /Outro aparelho mudou a ordem/.test(t)), tinha);
   });
   await tenta(['Desfazer: se o outro aparelho já vendeu as peças que o Concluir pôs no estoque, pergunta antes (o estoque ficaria negativo); "Cancelar" deixa tudo como está'], async () => {
-    const o = novaOrdem({ produtoId: 'prod-e1b', qtd: 4 }); iniciarOrdem(o);
+    const o = novaOrdem({ produtoId: 'prod-e1b', qtd: 4 }); iniciadaHa10(o);
     await pausa();
     opConcluir(o.id);
     await pausa();
@@ -769,7 +771,7 @@
       byId('ordens', o.id).status === 'concluido', [perguntas32, byId('ordens', o.id).status]);
   });
   await tenta(['Desfazer clicado antes da resposta de uma ação que o outro aparelho já tinha feito: um aviso só (o de que o outro mudou), sem "dependia de outra"'], async () => {
-    const o = novaOrdem({ produtoId: 'prod-e1b', qtd: 2 }); iniciarOrdem(o);
+    const o = novaOrdem({ produtoId: 'prod-e1b', qtd: 2 }); iniciadaHa10(o);
     await pausa();
     const l = DBDemo._ler().linhas['ordens/' + o.id];
     outroPC([{ n: 27, ops: [{ c: 'ordens', i: o.id, t: 'mudar', se: l.v, p: [{ s: { status: 'concluido', fim: hoje() } }] }] }]);
@@ -819,6 +821,652 @@
     const a = document.activeElement;
     ok('janelas: ao abrir Vender o cursor vai para a quantidade, nunca para a data', !!a && a.type !== 'date' && a.dataset.col === 'qtd', [a && a.tagName, a && a.type, a && (a.name || a.dataset.col)]);
   });
+  await carregarTudo();
+
+  // 33. versão 18, etapa 2: a impressora na frente. O bloco Próxima > Na impressora > Em acabamento (Painel e Produção), a fila
+  // que mostra o filamento, Falhou em 3 toques e as listas do Painel com o botão que resolve. Começa de um banco limpo; o
+  // "outro PC" grava direto no banco local, como nas seções 31 e 32.
+  for (let i = 0; i < 40 && temPendencias(); i++) await pausa(100);
+  localStorage.removeItem(DEMO_KEY); await carregarTudo(); render();
+  const perguntas33 = [];
+  window.confirm = m => { perguntas33.push(String(m)); return true; };       // OK nas perguntas do navegador desta seção
+  const ha = min => new Date(Date.now() - min * 60000).toISOString();
+  const pergunta33 = () => { const c = $('#modal .caixa.pergunta'); return c ? { titulo: ($('h3', c) || {}).textContent || '', texto: ($('.pergunta-txt', c) || {}).textContent || '', botoes: $$('.pergunta-botoes .btn', c).map(b => b.textContent) } : null; };
+  const resposta33 = rotulo => { const i = PERGUNTA ? PERGUNTA.botoes.findIndex(b => b.rotulo === rotulo) : -1; if (i < 0) throw new Error('a pergunta não tem "' + rotulo + '"'); responder(i); };
+  const desfazer33 = () => { const b = $$('#toasts .toast.com-acao button').pop(); if (!b) throw new Error('sem Desfazer no aviso'); b.click(); };
+  const st33 = id => (noBanco('ordens', id) || {}).status;
+  put('filamentos', { id: 'e2-preto', nome: 'PLA Preto E2', tipo: 'PLA', cor: '#111111', precoKg: 100, estoqueG: 165 });
+  put('filamentos', { id: 'e2-branco', nome: 'PLA Branco E2', tipo: 'PLA', cor: '#eeeeee', precoKg: 100, estoqueG: 2000 });
+  put('filamentos', { id: 'e2-azul', nome: 'PLA Azul E2', tipo: 'PLA', cor: '#2255cc', precoKg: 100, estoqueG: 1275 });
+  put('produtos', { id: 'e2-dragao', nome: 'Dragão E2', materiais: [{ filamentoId: 'e2-azul', pesoG: 88 }], horas: 3, estoque: 0, precos: { direta: 50 } });
+  put('produtos', { id: 'e2-chave', nome: 'Chaveiro E2', materiais: [{ filamentoId: 'e2-preto', pesoG: 9 }, { filamentoId: 'e2-branco', pesoG: 3 }], horas: 0.6, estoque: 0, precos: { direta: 10 } });
+  put('produtos', { id: 'e2-suporte', nome: 'Suporte E2', materiais: [{ filamentoId: 'e2-preto', pesoG: 48 }], horas: 2.4, estoque: 0, precos: { direta: 30 } });
+  put('produtos', { id: 'e2-arvore', nome: 'Árvore E2', materiais: [{ filamentoId: 'e2-branco', pesoG: 95 }, { filamentoId: 'e2-azul', pesoG: 14 }], horas: 4.6, estoque: 0, precos: { direta: 69 } });
+  put('produtos', { id: 'e2-noel', nome: 'Noel E2', materiais: [{ filamentoId: 'e2-branco', pesoG: 30 }], horas: 2, estoque: 0, acabamento: true, etapasAcabamento: 'lixar e pintar', precos: { direta: 59 } });
+  const o1 = novaOrdem({ id: 'e2-o1', produtoId: 'e2-dragao', qtd: 2 }); iniciarOrdem(o1); o1.inicio = ha(240); put('ordens', o1);
+  novaOrdem({ id: 'e2-o2', produtoId: 'e2-chave', qtd: 20 });
+  novaOrdem({ id: 'e2-o3', produtoId: 'e2-suporte', qtd: 4 });
+  novaOrdem({ id: 'e2-o4', produtoId: 'e2-dragao', qtd: 13 });
+  await pausa();
+  await tenta(['fila com filamento: cada ordem desconta o que as da frente (e a que imprime) vão gastar: falta 15 g e 192 g, 207 g na fila inteira',
+    'fila com filamento: sozinha, cada ordem mostraria 15 g e 27 g (a conta de antes, que não vê a fila)',
+    'fila com filamento: a linha da fila mostra cada filamento com o visto ou "falta 15 g"',
+    'falta para iniciar agora: o estoque menos o que as que já imprimem vão gastar (as da fila na frente não contam)',
+    'bloco: falta filamento para a próxima: o botão vermelho vira só Concluir, com Comprei (já com aquele filamento) e Escolher outra',
+    'fila com filamento: só leitura (nenhum estoque, custo ou registro muda)'], async () => {
+    const antes = bancoTexto(), est = S.filamentos.map(f => f.id + ':' + f.estoqueG + ':' + f.precoKg).join();
+    const m = materialDaFila(), preto = id => m.por.get(id).fils.find(x => x.id === 'e2-preto');
+    ok('fila com filamento: cada ordem desconta o que as da frente (e a que imprime) vão gastar: falta 15 g e 192 g, 207 g na fila inteira',
+      preto('e2-o2').falta === 15 && preto('e2-o3').falta === 192 && preto('e2-o2').falta + preto('e2-o3').falta === 207, [preto('e2-o2'), preto('e2-o3')]);
+    const sozinha = id => { const o = byId('ordens', id); return Math.ceil(opNecessidade(byId('produtos', o.produtoId), num(o.qtd), { fil: new Map(), ins: new Map() }).fils.find(x => x.fil.id === 'e2-preto').falta); };
+    ok('fila com filamento: sozinha, cada ordem mostraria 15 g e 27 g (a conta de antes, que não vê a fila)', sozinha('e2-o2') === 15 && sozinha('e2-o3') === 27, [sozinha('e2-o2'), sozinha('e2-o3')]);
+    const linha = opLinhaFila(filaProducao().find(x => x.o.id === 'e2-o2'), [], false, m.por.get('e2-o2'));
+    ok('fila com filamento: a linha da fila mostra cada filamento com o visto ou "falta 15 g"', /PLA Preto E2<\/span>\s*<b>180 g<\/b>\s*<em>falta 15 g<\/em>/.test(linha) && /PLA Branco E2<\/span>\s*<b>60 g<\/b>\s*<svg/.test(linha), linha.slice(0, 700));
+    const f3 = faltaParaIniciar(byId('ordens', 'e2-o3')), f4 = faltaParaIniciar(byId('ordens', 'e2-o4'));
+    ok('falta para iniciar agora: o estoque menos o que as que já imprimem vão gastar (as da fila na frente não contam)',
+      f3.length === 1 && f3[0].id === 'e2-preto' && f3[0].falta === 27 && f4.length === 1 && f4[0].id === 'e2-azul' && f4[0].falta === 45, [f3, f4]);
+    const b = opBloco('painel');
+    ok('bloco: falta filamento para a próxima: o botão vermelho vira só Concluir, com Comprei (já com aquele filamento) e Escolher outra',
+      /class="btn op-btn op-acao" data-id="e2-o1" onclick="opConcluir\(this\.dataset\.id\)">Concluir<small>2 peças entram no estoque<\/small>/.test(b) && !/opConcluirEIniciar/.test(b) &&
+      /A próxima \(20× Chaveiro E2\) precisa de mais <b>15 g de PLA Preto E2<\/b>/.test(b) && /data-id="e2-preto" onclick="cadNovaCompra\(this\.dataset\.id\)">Comprei<\/button>/.test(b) && /onclick="opEscolherOutra\(\)">Escolher outra/.test(b), b.slice(0, 600));
+    VIEWS.painel(); VIEWS.producao();
+    ok('fila com filamento: só leitura (nenhum estoque, custo ou registro muda)', bancoTexto() === antes && S.filamentos.map(f => f.id + ':' + f.estoqueG + ':' + f.precoKg).join() === est, 0);
+  });
+  // compra de preto (a próxima passa a ter filamento) e a ordem grande de azul sai da fila
+  put('filamentos', { ...byId('filamentos', 'e2-preto'), estoqueG: 400 }); excluirOrdem(byId('ordens', 'e2-o4'));
+  await pausa();
+  await tenta(['bloco: o botão vermelho diz o que vai acontecer ("Concluir e iniciar a próxima": 2 peças entram no estoque, inicia 20× Chaveiro E2), com Só concluir e Falhou',
+    'bloco: o mesmo bloco no Painel e na Produção, com Próxima, Na impressora e Em acabamento',
+    'bloco: as 6 situações (imprimindo, passou da hora, duas imprimindo, livre, sem fila e falta filamento, esta acima)'], async () => {
+    const b = opBloco('painel');
+    ok('bloco: o botão vermelho diz o que vai acontecer ("Concluir e iniciar a próxima": 2 peças entram no estoque, inicia 20× Chaveiro E2), com Só concluir e Falhou',
+      /data-id="e2-o1" data-prox="e2-o2" onclick="opConcluirEIniciar\(this\.dataset\.id, this\.dataset\.prox\)">Concluir e iniciar a próxima<small>2 peças entram no estoque · inicia 20× Chaveiro E2<\/small>/.test(b) &&
+      /onclick="opConcluir\(this\.dataset\.id\)">Só concluir/.test(b) && /onclick="opFalhou\(this\.dataset\.id\)">Falhou/.test(b) && /faltam 2h/.test(b) && /66%/.test(b), b.slice(0, 900));
+    const p = VIEWS.painel(), pr = VIEWS.producao(), ids = h => ['op-prox', 'op-imp', 'op-emacab'].map(i => h.includes(`id="${i}"`)).join();
+    ok('bloco: o mesmo bloco no Painel e na Produção, com Próxima, Na impressora e Em acabamento', /id="op-agora"/.test(p) && /id="op-agora"/.test(pr) && ids(p) === 'true,true,true' && ids(pr) === 'true,true,true' &&
+      /Próxima/.test(p) && /Na impressora/.test(p) && /Em acabamento/.test(p), [ids(p), ids(pr)]);
+    const sit = {};
+    const a1 = byId('ordens', 'e2-o1'), ini0 = a1.inicio;
+    a1.inicio = ha(7 * 60); put('ordens', a1); sit.passou = opBloco('painel');
+    a1.inicio = ini0; put('ordens', a1); iniciarOrdem(byId('ordens', 'e2-o3')); sit.duas = opBloco('painel');
+    reabrirOrdem(byId('ordens', 'e2-o3'), 'fila'); reabrirOrdem(byId('ordens', 'e2-o1'), 'fila'); sit.livre = opBloco('producao');
+    const ativas = S.ordens.filter(ORDEM_ATIVA).map(copia); ativas.forEach(o => rm('ordens', o.id)); sit.vazia = opBloco('painel');
+    ativas.forEach(o => put('ordens', o)); const a2 = byId('ordens', 'e2-o1'); iniciarOrdem(a2); a2.inicio = ini0; put('ordens', a2);
+    await pausa();
+    const r = { passou: /Passou da hora/.test(sit.passou) && /passou 1h/.test(sit.passou), duas: /2 ordens imprimindo/.test(sit.duas) && (sit.duas.match(/onclick="opConcluir\(this\.dataset\.id\)">Concluir</g) || []).length === 2,
+      livre: /Impressora livre/.test(sit.livre) && /onclick="opIniciar\(this\.dataset\.id\)">Iniciar<small>termina/.test(sit.livre) && /Depois dela/.test(sit.livre),
+      vazia: /Impressora livre/.test(sit.vazia) && /Nenhuma ordem na fila\./.test(sit.vazia) && /onclick="opNovaOrdem\(\)">\+ Nova ordem/.test(sit.vazia) && /sem-prox/.test(sit.vazia), voltou: st33('e2-o1') === 'imprimindo' && byId('ordens', 'e2-o1').inicio === ini0 };
+    ok('bloco: as 6 situações (imprimindo, passou da hora, duas imprimindo, livre, sem fila e falta filamento, esta acima)', Object.values(r).every(Boolean), r);
+  });
+  await tenta(['Concluir e iniciar a próxima: duas gravações separadas (a conclusão e o início)', 'Concluir e iniciar a próxima: as peças entram no estoque e a próxima começa agora',
+    'Concluir e iniciar a próxima: Desfazer volta as duas (o banco fica igual ao de antes, com a mesma hora de início)',
+    'Concluir e iniciar a próxima: Desfazer não desfaz nada se o outro aparelho mexeu na próxima depois'], async () => {
+    const antes = bancoTexto(), ini = byId('ordens', 'e2-o1').inicio, marca = seqGrupo;
+    opConcluirEIniciar('e2-o1', 'e2-o2');
+    const gs = FILA.filter(g => g.n > marca), gA = gs.find(g => g.ops.has('ordens/e2-o1')), gB = gs.find(g => g.ops.has('ordens/e2-o2'));
+    ok('Concluir e iniciar a próxima: duas gravações separadas (a conclusão e o início)', !!gA && !!gB && gA !== gB && !gA.ops.has('ordens/e2-o2') && !gB.ops.has('ordens/e2-o1'), gs.map(g => [...g.ops.keys()]));
+    await pausa(300);
+    ok('Concluir e iniciar a próxima: as peças entram no estoque e a próxima começa agora', st33('e2-o1') === 'concluido' && noBanco('produtos', 'e2-dragao').estoque === 2 && st33('e2-o2') === 'imprimindo' &&
+      Date.now() - Date.parse(noBanco('ordens', 'e2-o2').inicio) < 60000 && avisos32().some(t => /^2 peças entraram no estoque de prontas\. Iniciou: 20× Chaveiro E2\./.test(t)), [st33('e2-o1'), st33('e2-o2'), avisos32().slice(-1)]);
+    desfazer33();
+    await pausa(300);
+    ok('Concluir e iniciar a próxima: Desfazer volta as duas (o banco fica igual ao de antes, com a mesma hora de início)', bancoTexto() === antes && byId('ordens', 'e2-o1').inicio === ini && st33('e2-o2') === 'fila', [st33('e2-o1'), st33('e2-o2')]);
+    opConcluirEIniciar('e2-o1', 'e2-o2');
+    await pausa(300);
+    const l = DBDemo._ler().linhas['ordens/e2-o2'];
+    outroPC([{ n: 41, ops: [{ c: 'ordens', i: 'e2-o2', t: 'mudar', se: l.v, p: [{ s: { obs: 'mexida no outro PC' } }] }] }]);
+    await carregarTudo(true);
+    const antes2 = bancoTexto();
+    $$('#toasts .toast:not(.com-acao)').forEach(t => (t._sair ? t._sair() : t.remove())); desfazer33();
+    await pausa(300);
+    ok('Concluir e iniciar a próxima: Desfazer não desfaz nada se o outro aparelho mexeu na próxima depois', bancoTexto() === antes2 && avisos32().some(t => /Isto já mudou depois\. Nada foi desfeito\./.test(t)), avisos32());
+  });
+  // de volta: e2-o1 imprimindo (iniciou há 4 h) e e2-o2 na fila
+  reabrirOrdem(byId('ordens', 'e2-o2'), 'fila'); reabrirOrdem(byId('ordens', 'e2-o1'), 'imprimindo'); await pausa();
+  await tenta(['Concluir e iniciar a próxima: o outro aparelho já tinha concluído a que imprimia: a próxima inicia assim mesmo, nada entra em dobro e o aviso diz isso (com Desfazer da próxima), sem mandar repetir'], async () => {
+    const l = DBDemo._ler().linhas['ordens/e2-o1'], est0 = noBanco('produtos', 'e2-dragao').estoque, azul0 = noBanco('filamentos', 'e2-azul').estoqueG;
+    outroPC([{ n: 42, ops: [{ c: 'ordens', i: 'e2-o1', t: 'mudar', se: l.v, p: [{ s: { status: 'concluido', fim: hoje(), fimEm: agoraISO() } }] }, { c: 'produtos', i: 'e2-dragao', t: 'mudar', p: [{ a: { estoque: 2 } }] },
+      { c: 'filamentos', i: 'e2-azul', t: 'mudar', p: [{ a: { estoqueG: -176 } }] }] }]);
+    limparAvisos();
+    opConcluirEIniciar('e2-o1', 'e2-o2');                          // este PC ainda não sabe
+    const tinha = $$('#toasts .toast.com-acao').length;
+    await pausa(300);
+    const desf = $$('#toasts .toast.com-acao').map(t => t.textContent);
+    ok('Concluir e iniciar a próxima: o outro aparelho já tinha concluído a que imprimia: a próxima inicia assim mesmo, nada entra em dobro e o aviso diz isso (com Desfazer da próxima), sem mandar repetir',
+      tinha === 1 && st33('e2-o2') === 'imprimindo' && st33('e2-o1') === 'concluido' && noBanco('produtos', 'e2-dragao').estoque === est0 + 2 && noBanco('filamentos', 'e2-azul').estoqueG === azul0 - 176 &&
+      desf.length === 1 && /^A ordem de 2× Dragão E2 já tinha sido concluída em outro aparelho\. Iniciou: 20× Chaveiro E2\.Desfazer$/.test(desf[0]) && !avisos32().some(t => /não foi gravada|repita/.test(t)),
+      [tinha, st33('e2-o1'), st33('e2-o2'), noBanco('produtos', 'e2-dragao').estoque, est0, avisos32()]);
+  });
+  await tenta(['Concluir uma ordem que iniciou há menos de 2 minutos pergunta antes, em botões grandes ("Não, foi engano" não conclui)', 'Concluir de uma ordem que iniciou há pouco: "Sim, concluir" conclui',
+    'Concluir e iniciar a próxima também pergunta quando a que imprime iniciou há menos de 2 minutos'], async () => {
+    perguntas33.length = 0;
+    opConcluir('e2-o2');                                             // e2-o2 começou agora mesmo (o teste de cima)
+    const p = pergunta33();
+    resposta33('Não, foi engano');
+    await pausa();
+    ok('Concluir uma ordem que iniciou há menos de 2 minutos pergunta antes, em botões grandes ("Não, foi engano" não conclui)', !!p && p.titulo === 'Iniciou agora mesmo' && /^20× Chaveiro E2 iniciou há \d+ segundos?\. Já terminou mesmo\?$/.test(p.texto) &&
+      p.botoes.join('|') === 'Não, foi engano|Sim, concluir' && st33('e2-o2') === 'imprimindo' && !perguntas33.length, [p, st33('e2-o2'), perguntas33]);
+    opConcluir('e2-o2'); resposta33('Sim, concluir');
+    await pausa(300);
+    ok('Concluir de uma ordem que iniciou há pouco: "Sim, concluir" conclui', st33('e2-o2') === 'concluido', st33('e2-o2'));
+    const a = novaOrdem({ id: 'e2-o5', produtoId: 'e2-suporte', qtd: 1 }); iniciarOrdem(a); novaOrdem({ id: 'e2-o6', produtoId: 'e2-chave', qtd: 2 });
+    await pausa();
+    opConcluirEIniciar('e2-o5', 'e2-o6');
+    const p2 = pergunta33();
+    resposta33('Não, foi engano');
+    await pausa();
+    ok('Concluir e iniciar a próxima também pergunta quando a que imprime iniciou há menos de 2 minutos', !!p2 && p2.titulo === 'Iniciou agora mesmo' && st33('e2-o5') === 'imprimindo' && st33('e2-o6') === 'fila', [p2, st33('e2-o5'), st33('e2-o6')]);
+    reabrirOrdem(byId('ordens', 'e2-o5'), 'fila'); excluirOrdem(byId('ordens', 'e2-o5')); excluirOrdem(byId('ordens', 'e2-o6'));
+    await pausa();
+  });
+  await tenta(['Iniciar sem filamento pergunta em botões grandes (Comprei, Iniciar assim mesmo, Cancelar), no lugar do OK do navegador', '"Comprei" abre a janela de compra de hoje já com aquele filamento',
+    '"Iniciar assim mesmo" inicia', 'Iniciar com a impressora ocupada pergunta em botões grandes (Concluir a atual e iniciar esta, Deixar as duas imprimindo, Cancelar)',
+    '"Deixar as duas imprimindo" inicia esta também', '"Concluir a atual e iniciar esta" conclui a que imprimia e inicia esta'], async () => {
+    put('filamentos', { ...byId('filamentos', 'e2-preto'), estoqueG: 100 });
+    novaOrdem({ id: 'e2-o7', produtoId: 'e2-suporte', qtd: 4 });                  // precisa de 192 g de preto
+    await pausa();
+    perguntas33.length = 0;
+    opIniciar('e2-o7');
+    const p = pergunta33();
+    ok('Iniciar sem filamento pergunta em botões grandes (Comprei, Iniciar assim mesmo, Cancelar), no lugar do OK do navegador', !!p && p.titulo === 'Falta filamento' &&
+      p.texto === 'Para 4× Suporte E2 falta 92 g de PLA Preto E2 (precisa 192 g).' && p.botoes.join('|') === 'Comprei PLA Preto E2|Iniciar assim mesmo|Cancelar' && !perguntas33.length && st33('e2-o7') === 'fila', [p, perguntas33]);
+    resposta33('Comprei PLA Preto E2');
+    ok('"Comprei" abre a janela de compra de hoje já com aquele filamento', ($('#modal h3') || {}).textContent === 'Registrar compra de filamento' && ($('#modal [name=filamentoId]') || {}).value === 'e2-preto', ($('#modal h3') || {}).textContent);
+    if (FORM) FORM.sujo = false; fecharModal();
+    opIniciar('e2-o7'); resposta33('Iniciar assim mesmo');
+    await pausa(300);
+    ok('"Iniciar assim mesmo" inicia', st33('e2-o7') === 'imprimindo', st33('e2-o7'));
+    novaOrdem({ id: 'e2-o8', produtoId: 'e2-chave', qtd: 2 });
+    put('filamentos', { ...byId('filamentos', 'e2-preto'), estoqueG: 500 });
+    await pausa();
+    opIniciar('e2-o8');
+    const p2 = pergunta33();
+    ok('Iniciar com a impressora ocupada pergunta em botões grandes (Concluir a atual e iniciar esta, Deixar as duas imprimindo, Cancelar)', !!p2 && p2.titulo === 'A impressora está ocupada' &&
+      p2.texto === '4× Suporte E2 está imprimindo.' && p2.botoes.join('|') === 'Concluir a atual e iniciar esta|Deixar as duas imprimindo|Cancelar' && !perguntas33.length, [p2, perguntas33]);
+    resposta33('Deixar as duas imprimindo');
+    await pausa(300);
+    ok('"Deixar as duas imprimindo" inicia esta também', st33('e2-o8') === 'imprimindo' && st33('e2-o7') === 'imprimindo', [st33('e2-o7'), st33('e2-o8')]);
+    desfazer33();                                                    // e2-o8 volta para a fila
+    await pausa(300);
+    const o7 = byId('ordens', 'e2-o7'); o7.inicio = ha(30); put('ordens', o7); await pausa();
+    opIniciar('e2-o8'); resposta33('Concluir a atual e iniciar esta');
+    await pausa(300);
+    ok('"Concluir a atual e iniciar esta" conclui a que imprimia e inicia esta', st33('e2-o7') === 'concluido' && st33('e2-o8') === 'imprimindo', [st33('e2-o7'), st33('e2-o8')]);
+  });
+  await tenta(['Reabrir: duas saídas claras (Voltar a imprimir, com a hora de início, ou Voltar para a fila), em botões grandes',
+    'Reabrir: "Voltar a imprimir" com outra ordem imprimindo pergunta antes, como o Iniciar (A impressora está ocupada), e nada muda até a resposta',
+    'Reabrir: "Voltar a imprimir" guarda a hora de início',
+    'Reabrir: "Voltar para a fila" tira a hora de início', 'Reabrir uma que passou pelo acabamento: volta para o acabamento'], async () => {
+    perguntas33.length = 0;
+    const ini = noBanco('ordens', 'e2-o7').inicio;
+    opReabrir('e2-o7');
+    const p = pergunta33();
+    ok('Reabrir: duas saídas claras (Voltar a imprimir, com a hora de início, ou Voltar para a fila), em botões grandes', !!p && p.titulo === 'Reabrir a ordem' && p.botoes.length === 3 &&
+      /^Voltar a imprimir \(iniciou (hoje|ontem) às \d\d:\d\d\)$/.test(p.botoes[0]) && p.botoes[1] === 'Voltar para a fila' && p.botoes[2] === 'Cancelar' && !perguntas33.length, [p, perguntas33]);
+    resposta33(p.botoes[0]);                                         // a 2× Chaveiro (e2-o8) está imprimindo
+    await pausa(300);
+    const pOc = pergunta33();
+    ok('Reabrir: "Voltar a imprimir" com outra ordem imprimindo pergunta antes, como o Iniciar (A impressora está ocupada), e nada muda até a resposta', !!pOc && pOc.titulo === 'A impressora está ocupada' &&
+      pOc.texto === '2× Chaveiro E2 está imprimindo.' && pOc.botoes.join('|') === 'Voltar para a fila|Deixar as duas imprimindo|Cancelar' && st33('e2-o7') === 'concluido' && st33('e2-o8') === 'imprimindo', [pOc, st33('e2-o7')]);
+    if (pOc) resposta33('Deixar as duas imprimindo');
+    await pausa(300);
+    ok('Reabrir: "Voltar a imprimir" guarda a hora de início', st33('e2-o7') === 'imprimindo' && noBanco('ordens', 'e2-o7').inicio === ini, [st33('e2-o7'), noBanco('ordens', 'e2-o7').inicio, ini]);
+    opConcluir('e2-o7'); await pausa(300);
+    opReabrir('e2-o7'); resposta33('Voltar para a fila');
+    await pausa(300);
+    ok('Reabrir: "Voltar para a fila" tira a hora de início', st33('e2-o7') === 'fila' && !noBanco('ordens', 'e2-o7').inicio, noBanco('ordens', 'e2-o7'));
+    const n = novaOrdem({ id: 'e2-o9', produtoId: 'e2-noel', qtd: 1 }); iniciarOrdem(n); n.inicio = ha(60); put('ordens', n); concluirOrdem(n); concluirOrdem(n);
+    await pausa(300);
+    opReabrir('e2-o9');
+    const p2 = pergunta33();
+    if (p2) resposta33('Voltar para o acabamento');
+    await pausa(300);
+    ok('Reabrir uma que passou pelo acabamento: volta para o acabamento', !!p2 && p2.botoes.join('|') === 'Voltar para o acabamento|Cancelar' && st33('e2-o9') === 'acabamento', [p2, st33('e2-o9')]);
+  });
+  await tenta(['Na frente: a ordem passa a ser a próxima', 'Na frente: Desfazer devolve o lugar (o banco fica igual ao de antes)'], async () => {
+    const fila = () => filaProducao().filter(x => x.o.status === 'fila').map(x => x.o.id);
+    const antes = bancoTexto(), ult = fila().pop();
+    opFrente(ult);
+    await pausa(300);
+    ok('Na frente: a ordem passa a ser a próxima', fila()[0] === ult && avisos32().some(t => /^Passou para a frente: .+\. É a próxima\./.test(t)), fila());
+    desfazer33();
+    await pausa(300);
+    ok('Na frente: Desfazer devolve o lugar (o banco fica igual ao de antes)', bancoTexto() === antes && fila().pop() === ult, fila());
+  });
+  // Falhou: a árvore (duas cores, 9h12 de impressão) imprimindo há 4h36 (metade)
+  S.ordens.filter(o => o.status === 'imprimindo').forEach(o => reabrirOrdem(o, 'fila'));
+  const oF2 = novaOrdem({ id: 'e2-of', produtoId: 'e2-arvore', qtd: 2 }); iniciarOrdem(oF2); oF2.inicio = ha(276); put('ordens', oF2);
+  await pausa();
+  const chip33 = txt => { const b = $$('#modal .op-chip').find(x => x.textContent.trim().startsWith(txt)); if (!b) throw new Error('sem o botão ' + txt); b.click(); };
+  await tenta(['Falhou: o motivo em 8 botões e as gramas já calculadas pelo tempo impresso (50% = 95 g + 14 g), à vista para trocar',
+    'Falhou: sem tocar no motivo, nada é gravado e a janela avisa', 'Falhou: "Voltar para a fila" registra uma falha por filamento, com o código fixo e a ordem, e a ordem volta para a fila',
+    'Falhou: a perda dos dois filamentos de uma peça de duas cores conta como uma falha só ("Falhou 1 vez")', 'Falhou: Desfazer tira as falhas e a ordem volta como estava (o banco fica igual ao de antes)',
+    'Falhou: "Imprimir de novo agora" registra e a impressão recomeça agora', 'Falhou: "Continua imprimindo" registra e a ordem continua com a mesma hora de início',
+    'Falhou: a janela avisa quando a ordem já tem falha registrada'], async () => {
+    const antes = bancoTexto(), branco0 = noBanco('filamentos', 'e2-branco').estoqueG, azul0 = noBanco('filamentos', 'e2-azul').estoqueG;
+    opFalhou('e2-of');
+    const f = $('#modal form.op-falha'), motivos = $$('#op-motivos .op-chip').map(b => b.textContent), g = i => (campoDoForm(f, 'g' + i) || {}).value;
+    ok('Falhou: o motivo em 8 botões e as gramas já calculadas pelo tempo impresso (50% = 95 g + 14 g), à vista para trocar', !!f && motivos.length === 8 && motivos.join('|') === opMotivos.join('|') &&
+      g(0) === '95' && g(1) === '14' && /^50% já impresso/.test(($('#modal .op-chip.on') || {}).textContent || '') && /Imprimir de novo agora/.test($('#modal button[type=submit]').textContent) &&
+      $$('#modal .actions .op-manter').map(b => b.textContent).join('|') === 'Continua imprimindo|Voltar para a fila', [motivos, g(0), g(1)]);
+    f.requestSubmit();
+    await pausa(200);
+    ok('Falhou: sem tocar no motivo, nada é gravado e a janela avisa', bancoTexto() === antes && !!$('#modal.open') && $('#op-motivos').classList.contains('erro') && avisos32().some(t => /Toque no que aconteceu/.test(t)), 0);
+    chip33('Entupimento'); campoDoForm(f, 'g0').value = '100';
+    opSaidaFalha('fila');
+    await pausa(300);
+    const cods = ['fa-e2-of-e2-branco-0', 'fa-e2-of-e2-azul-0'].map(c => noBanco('falhas', c));
+    ok('Falhou: "Voltar para a fila" registra uma falha por filamento, com o código fixo e a ordem, e a ordem volta para a fila', !$('#modal.open') && cods.every(x => x && x.ordemId === 'e2-of' && x.motivo === 'Entupimento') &&
+      cods[0].gramas === 100 && cods[1].gramas === 14 && noBanco('filamentos', 'e2-branco').estoqueG === branco0 - 100 && noBanco('filamentos', 'e2-azul').estoqueG === azul0 - 14 && st33('e2-of') === 'fila' && !noBanco('ordens', 'e2-of').inicio,
+      [cods, st33('e2-of')]);
+    const x = filaProducao().find(y => y.o.id === 'e2-of');
+    ok('Falhou: a perda dos dois filamentos de uma peça de duas cores conta como uma falha só ("Falhou 1 vez")', falhasDaOrdem(byId('ordens', 'e2-of')) === 1 && cods[1].evento === cods[0].id &&
+      /Falhou 1 vez/.test(opLinhaFila(x, [x], false)) && noBanco('ordens', 'e2-of').falhas === 1, [falhasDaOrdem(byId('ordens', 'e2-of')), cods[1]]);
+    desfazer33();
+    await pausa(300);
+    ok('Falhou: Desfazer tira as falhas e a ordem volta como estava (o banco fica igual ao de antes)', bancoTexto() === antes && st33('e2-of') === 'imprimindo', st33('e2-of'));
+    const ini0 = noBanco('ordens', 'e2-of').inicio;
+    opFalhou('e2-of'); chip33('Suporte falhou'); $('#modal form').requestSubmit();
+    await pausa(300);
+    ok('Falhou: "Imprimir de novo agora" registra e a impressão recomeça agora', st33('e2-of') === 'imprimindo' && Date.now() - Date.parse(noBanco('ordens', 'e2-of').inicio) < 60000 && noBanco('ordens', 'e2-of').inicio !== ini0 &&
+      !!noBanco('falhas', 'fa-e2-of-e2-branco-0') && avisos32().some(t => /^Falha registrada \(109 g, Suporte falhou\)\. A impressão recomeçou agora\./.test(t)), [st33('e2-of'), avisos32().slice(-1)]);
+    const ini1 = noBanco('ordens', 'e2-of').inicio;
+    opFalhou('e2-of');
+    const aviso = ($('#modal form .aviso') || {}).textContent || '';
+    chip33('Descolou da mesa'); opSaidaFalha('continua');
+    await pausa(300);
+    // o código da falha seguinte conta os registros (os 2 filamentos da falha de antes), como a versão 17: termina em -2
+    ok('Falhou: "Continua imprimindo" registra e a ordem continua com a mesma hora de início', st33('e2-of') === 'imprimindo' && noBanco('ordens', 'e2-of').inicio === ini1 && !!noBanco('falhas', 'fa-e2-of-e2-branco-2') &&
+      falhasDaOrdem(byId('ordens', 'e2-of')) === 2, [st33('e2-of'), falhasDaOrdem(byId('ordens', 'e2-of')), S.falhas.filter(f => f.ordemId === 'e2-of').map(f => f.id)]);
+    ok('Falhou: a janela avisa quando a ordem já tem falha registrada', /^Esta ordem já tem 1 falha registrada: a última, \d+ g de PLA (Branco|Azul) E2, agora há pouco\. Registre de novo só se for outra\.$/.test(aviso), aviso);
+  });
+  await tenta(['Falhou: a mesma falha registrada no outro aparelho ao mesmo tempo entra uma vez só (o filamento baixa uma vez)',
+    'Falhou: a mesma falha, que chegou do outro aparelho com a janela aberta, não entra de novo e quem salva é avisado',
+    'Falhou: a ordem mudou no outro aparelho com a janela aberta: nada é gravado e aparece o aviso',
+    'Falhou: a ordem mudou no outro aparelho e este ainda não sabia: a falha entra uma vez e a mudança da ordem não; o aviso diz que a falha foi registrada e que a ordem não mudou (com Desfazer), sem mandar repetir',
+    'Falhou: o Desfazer desse aviso tira só a falha (o filamento volta) e a ordem fica como o outro aparelho deixou'], async () => {
+    // o outro PC (também na versão 18) registra a mesma falha (os mesmos códigos: o n conta os registros, nCodigoFalha) direto no
+    // banco; este PC ainda não sabe e salva a sua
+    const nOutro = () => [nCodigoFalha(byId('ordens', 'e2-of')), falhasDaOrdem(byId('ordens', 'e2-of'))];
+    let [n, nEv] = nOutro();
+    const gravarOutro = (num, n1, ev1) => outroPC([{ n: num, ops: [{ c: 'filamentos', i: 'e2-branco', t: 'mudar', p: [{ a: { estoqueG: -95 } }] }, { c: 'filamentos', i: 'e2-azul', t: 'mudar', p: [{ a: { estoqueG: -14 } }] },
+      { c: 'falhas', i: 'fa-e2-of-e2-branco-' + n1, t: 'novo', d: { data: hoje(), produtoId: 'e2-arvore', filamentoId: 'e2-branco', gramas: 95, motivo: 'Entupimento', ordemId: 'e2-of', custo: 9.5, criadoEm: agoraISO() } },
+      { c: 'falhas', i: 'fa-e2-of-e2-azul-' + n1, t: 'novo', d: { data: hoje(), produtoId: 'e2-arvore', filamentoId: 'e2-azul', gramas: 14, motivo: 'Entupimento', ordemId: 'e2-of', evento: 'fa-e2-of-e2-branco-' + n1, custo: 1.4, criadoEm: agoraISO() } },
+      { c: 'ordens', i: 'e2-of', t: 'mudar', p: [{ s: { falhas: ev1 + 1 } }] }] }]);
+    let branco0 = noBanco('filamentos', 'e2-branco').estoqueG;
+    opFalhou('e2-of'); campoDoForm($('#modal form'), 'g0').value = '95'; campoDoForm($('#modal form'), 'g1').value = '14';
+    gravarOutro(51, n, nEv);
+    limparAvisos(); chip33('Entupimento'); opSaidaFalha('continua');
+    await pausa(400);
+    ok('Falhou: a mesma falha registrada no outro aparelho ao mesmo tempo entra uma vez só (o filamento baixa uma vez)', linhas32(d => d.ordemId === 'e2-of').length === 2 * (nEv + 1) &&
+      ['fa-e2-of-e2-branco-' + n, 'fa-e2-of-e2-azul-' + n].every(c => !!noBanco('falhas', c)) && noBanco('filamentos', 'e2-branco').estoqueG === branco0 - 95 && byId('filamentos', 'e2-branco').estoqueG === branco0 - 95 &&
+      avisos32().some(t => /Outro aparelho já tinha registrado a falha de 95 g de PLA Branco E2\. Nada foi gravado em dobro/.test(t)), [noBanco('filamentos', 'e2-branco').estoqueG, branco0, avisos32()]);
+    [n, nEv] = nOutro(); branco0 = noBanco('filamentos', 'e2-branco').estoqueG;
+    opFalhou('e2-of'); campoDoForm($('#modal form'), 'g0').value = '95'; campoDoForm($('#modal form'), 'g1').value = '14';
+    gravarOutro(52, n, nEv);
+    await carregarTudo(true);                                         // chega aqui com a janela aberta
+    const antes = bancoTexto();
+    limparAvisos(); chip33('Entupimento'); opSaidaFalha('fila');
+    await pausa(300);
+    ok('Falhou: a mesma falha, que chegou do outro aparelho com a janela aberta, não entra de novo e quem salva é avisado', bancoTexto() === antes && !$('#modal.open') &&
+      avisos32().some(t => /^Outro aparelho já registrou esta falha \(95 g de PLA Branco E2\) enquanto esta janela estava aberta\. Nada foi gravado em dobro/.test(t)), avisos32());
+    opFalhou('e2-of');
+    const l = DBDemo._ler().linhas['ordens/e2-of'];
+    outroPC([{ n: 53, ops: [{ c: 'ordens', i: 'e2-of', t: 'mudar', se: l.v, p: [{ s: { status: 'fila', inicio: '' } }] }] }]);
+    await carregarTudo(true);
+    const antes2 = bancoTexto();
+    limparAvisos(); chip33('Outro'); $('#modal form').requestSubmit();
+    await pausa(300);
+    ok('Falhou: a ordem mudou no outro aparelho com a janela aberta: nada é gravado e aparece o aviso', bancoTexto() === antes2 && avisos32().some(t => /^Outro aparelho mexeu nesta ordem enquanto esta janela estava aberta\. Nada foi gravado/.test(t)), avisos32());
+    const o = byId('ordens', 'e2-of'); iniciarOrdem(o); o.inicio = ha(276); put('ordens', o);
+    await pausa();
+    [n, nEv] = nOutro(); branco0 = noBanco('filamentos', 'e2-branco').estoqueG;
+    opFalhou('e2-of');
+    const l2 = DBDemo._ler().linhas['ordens/e2-of'];
+    outroPC([{ n: 54, ops: [{ c: 'ordens', i: 'e2-of', t: 'mudar', se: l2.v, p: [{ s: { status: 'fila', inicio: '' } }] }] }]);   // este PC ainda não sabe
+    limparAvisos(); chip33('Outro'); campoDoForm($('#modal form'), 'g0').value = '50'; campoDoForm($('#modal form'), 'g1').value = '0';
+    $('#modal form').requestSubmit();                                // Imprimir de novo agora
+    await pausa(400);
+    const vistos = $$('#toasts .toast').map(t => t.textContent);
+    ok('Falhou: a ordem mudou no outro aparelho e este ainda não sabia: a falha entra uma vez e a mudança da ordem não; o aviso diz que a falha foi registrada e que a ordem não mudou (com Desfazer), sem mandar repetir',
+      !!noBanco('falhas', 'fa-e2-of-e2-branco-' + n) && noBanco('filamentos', 'e2-branco').estoqueG === branco0 - 50 && st33('e2-of') === 'fila' && !noBanco('ordens', 'e2-of').inicio &&
+      falhasDaOrdem(byId('ordens', 'e2-of')) === nEv + 1 && vistos.length === 1 && $$('#toasts .toast.com-acao').length === 1 &&
+      /^Falha registrada \(50 g, Outro\)\. A ordem de 2× Árvore E2 não mudou: outro aparelho mexeu nela pouco antes, e a tela já mostra como ela ficou\.Desfazer$/.test(vistos[0]) &&
+      !avisos32().some(t => /não foi gravada|repita/.test(t)), [noBanco('ordens', 'e2-of'), noBanco('filamentos', 'e2-branco').estoqueG, branco0, vistos]);
+    const antesDesf = bancoTexto();
+    desfazer33();
+    await pausa(300);
+    ok('Falhou: o Desfazer desse aviso tira só a falha (o filamento volta) e a ordem fica como o outro aparelho deixou', !noBanco('falhas', 'fa-e2-of-e2-branco-' + n) && noBanco('filamentos', 'e2-branco').estoqueG === branco0 &&
+      st33('e2-of') === 'fila' && !noBanco('ordens', 'e2-of').inicio && bancoTexto() !== antesDesf && avisos32().some(t => /^Desfeito: a falha saiu/.test(t)), [noBanco('filamentos', 'e2-branco').estoqueG, branco0, st33('e2-of'), avisos32().slice(-2)]);
+  });
+  await tenta(['+ Registrar falha: com uma ordem imprimindo, abre o Falhou dela, com o link para a falha de outra peça', 'falha avulsa: nenhum filamento vem marcado (a pessoa escolhe)'], async () => {
+    S.ordens.filter(o => o.status === 'imprimindo').forEach(o => reabrirOrdem(o, 'fila'));
+    const o = byId('ordens', 'e2-of'); iniciarOrdem(o); put('ordens', o);
+    await pausa();
+    opRegistrarFalha();
+    ok('+ Registrar falha: com uma ordem imprimindo, abre o Falhou dela, com o link para a falha de outra peça', ($('#modal h3') || {}).textContent === 'Falhou: 2× Árvore E2' && /Registrar falha de outra peça/.test(($('#modal form') || {}).textContent || ''), ($('#modal h3') || {}).textContent);
+    opFalhaAvulsa();
+    const s = $('#modal [name=filamentoId]');
+    ok('falha avulsa: nenhum filamento vem marcado (a pessoa escolhe)', ($('#modal h3') || {}).textContent === 'Registrar falha' && !!s && s.value === '' && s.options[0].textContent === '— escolha o filamento —', s && s.value);
+  });
+  // Painel: um aviso de cada tipo de hoje (os de ordem, manutenção, material, produto, conta e alíquota) e um orçamento aprovado
+  for (let i = 0; i < 40 && temPendencias(); i++) await pausa(100);
+  localStorage.removeItem(DEMO_KEY); await carregarTudo();
+  Object.assign(S.config, { impostoConfirmado: false, alertaEstoque: 200 }); saveMeta('config');
+  put('filamentos', { id: 'p2-f1', nome: 'PLA Pouco', tipo: 'PLA', cor: '#aa0000', precoKg: 100, estoqueG: 150 });
+  put('filamentos', { id: 'p2-f2', nome: 'PLA Zero', tipo: 'PLA', cor: '#00aa00', precoKg: 100, estoqueG: 0 });
+  put('filamentos', { id: 'p2-f3', nome: 'PLA Muito', tipo: 'PLA', cor: '#0000aa', precoKg: 100, estoqueG: 5000 });
+  put('insumos', { id: 'p2-i1', nome: 'Caixa Pouca', unidade: 'un', custo: 1, estoque: 3, minimo: 5 });
+  put('insumos', { id: 'p2-i2', nome: 'Caixa Zero', unidade: 'un', custo: 1, estoque: 0, minimo: 5 });
+  put('produtos', { id: 'p2-a', nome: 'Peça A', materiais: [{ filamentoId: 'p2-f3', pesoG: 50 }], horas: 60, estoque: 0, estoqueMinimo: 4, precos: { direta: 30 } });
+  put('produtos', { id: 'p2-b', nome: 'Peça B', materiais: [{ filamentoId: 'p2-f3', pesoG: 20 }], horas: 1, estoque: -2, precos: { direta: 30 } });
+  put('produtos', { id: 'p2-c', nome: 'Peça C', materiais: [{ filamentoId: 'p2-f3', pesoG: 20 }], horas: 1, estoque: 0, acabamento: true, precos: { direta: 30 } });
+  const o_ = (id, produtoId, ordem, extra = {}) => put('ordens', { id, produtoId, qtd: 1, status: 'fila', data: hoje(), prazo: '', clienteId: '', obs: '', criadoEm: ha(120), ordem, ...extra });
+  o_('p2-o0', 'p2-b', 101);                                                          // a primeira da fila (sem "Na frente")
+  o_('p2-o1', 'p2-b', 102, { prazo: addDias(hoje(), -1) });                           // atrasada
+  o_('p2-o2', 'p2-b', 103, { prazo: hoje() });                                         // vence hoje
+  o_('p2-o3', 'p2-a', 104, { prazo: addDias(hoje(), 1) });                            // 60 h de impressão: pela fila passa do prazo
+  o_('p2-o4', 'p2-c', 4000, { status: 'acabamento', prazo: addDias(hoje(), -1), fimImpressao: hoje(), fimImpressaoEm: ha(60), passouAcabamento: true, consumo: [], insumosUsados: [] });
+  put('manutItens', { id: 'p2-m1', nome: 'Limpar a mesa', intervaloH: 1, ultimaH: horimetro() - 2 });   // vencida
+  put('manutItens', { id: 'p2-m2', nome: 'Trocar o bico', intervaloH: 100, ultimaH: horimetro() - 90 });  // próxima
+  put('clientes', { id: 'p2-c1', nome: 'Cliente Painel' });
+  criarConta({ id: 'p2-ct1', tipo: 'pagar', descricao: 'Conta vencida', valor: 100, vencimento: addDias(hoje(), -1) });
+  criarConta({ id: 'p2-ct2', tipo: 'pagar', descricao: 'Conta de hoje', valor: 50, vencimento: hoje() });
+  criarConta({ id: 'p2-ct3', tipo: 'receber', descricao: 'A receber atrasada', valor: 80, vencimento: addDias(hoje(), -2), clienteId: 'p2-c1' });
+  criarConta({ id: 'p2-ct4', tipo: 'pagar', descricao: 'Conta da semana', valor: 30, vencimento: addDias(hoje(), 3) });
+  put('orcamentos', { id: 'p2-orc', numero: 7, data: hoje(), validade: addDias(hoje(), 7), clienteId: 'p2-c1', clienteNome: '', itens: [{ produtoId: 'p2-a', descricao: 'Peça A', qtd: 2, precoUnit: 30 }], desconto: 0, sinalPct: 0, status: 'aprovado', ordensGeradas: false });
+  await pausa(300);
+  await tenta(['Painel: os avisos de hoje continuam todos, cada um na sua lista (Precisa de atenção, Contas e Material acabando)',
+    'Painel: cada linha tem o botão que resolve (Feito, Na frente, Pronto, Criar ordem com o código fixo, Produzir, Pagar e Receber)',
+    'Painel: no celular, três ícones no alto pulam até as listas'], async () => {
+    ['atencao', 'contas', 'material'].forEach(k => { opListaAberta[k] = true; });          // "Ver mais" aberto nas três listas
+    const av = alertas(), at = opItensAtencao(), ct = opItensContas(), mt = opItensMaterial(), p = VIEWS.painel();
+    ['atencao', 'contas', 'material'].forEach(k => { opListaAberta[k] = false; });
+    const kinds = [...new Set(av.map(a => a.k + ':' + a.tipo))].sort();
+    const nome = a => (a.k === 'filamento' ? byId('filamentos', a.id) : a.k === 'insumo' ? byId('insumos', a.id) : byId('produtos', a.id) || {}).nome;
+    const naLista = a => (['conta-vencida', 'conta-hoje', 'receber'].includes(a.k) ? ct.some(x => x.b.id === a.id)
+      : ['filamento', 'insumo'].includes(a.k) ? mt.some(x => x.link === a.pg && x.titulo.endsWith(esc(nome(a))))
+        : ['atrasada', 'hoje', 'estoura'].includes(a.k) ? at.some(x => x.k === a.k && x.titulo === esc(opOrdemTxt(byId('ordens', a.id))))
+          : ['manut-vencida', 'manut-proxima', 'minimo'].includes(a.k) ? at.some(x => x.k === a.k && x.b && x.b.id === a.id)
+            : a.k === 'negativo' ? at.some(x => x.k === a.k && x.titulo === esc(nome(a))) : a.k === 'aliquota' && at.some(x => x.k === 'aliquota'));
+    ok('Painel: os avisos de hoje continuam todos, cada um na sua lista (Precisa de atenção, Contas e Material acabando)', av.length === 16 && kinds.length === 15 && av.every(naLista) &&
+      at.length === 10 && ct.length === 4 && mt.length === 4 && /id="op-atencao"/.test(p) && /id="op-contas"/.test(p) && /id="op-material"/.test(p), { av: av.map(a => a.k + ':' + a.tipo), kinds, faltam: av.filter(a => !naLista(a)).map(a => a.texto), at: at.length, ct: ct.length, mt: mt.length });
+    const tem = (fn, id, rot) => new RegExp(`data-id="${id}"[^>]*onclick="${fn}\\(this\\.dataset\\.id[^"]*\\)">${rot}<`).test(p);
+    const botoes = { feito: tem('opFeito', 'p2-m1', 'Feito') && tem('opFeito', 'p2-m2', 'Feito'), frente: tem('opFrente', 'p2-o1', 'Na frente') && tem('opFrente', 'p2-o2', 'Na frente') && tem('opFrente', 'p2-o3', 'Na frente'),
+      primeira: !/data-id="p2-o0"[^>]*onclick="opFrente/.test(p), pronto: tem('opAcabamentoPronto', 'p2-o4', 'Pronto'), produzir: tem('comProduzirOrcamento', 'p2-orc', 'Produzir'),
+      criar: new RegExp(`data-id="p2-a" data-qtd="3" data-cod="${codigoSugestao('p2-a')}" onclick="opCriarDaSugestao\\(this\\.dataset\\.id, this\\.dataset\\.qtd, this\\.dataset\\.cod\\)">Criar ordem<`).test(p),
+      pagar: tem('ctaPagar', 'p2-ct1', 'Pagar') && tem('ctaPagar', 'p2-ct2', 'Pagar') && tem('ctaPagar', 'p2-ct4', 'Pagar'), receber: tem('ctaPagar', 'p2-ct3', 'Receber'),
+      abrir: /href="#vendas">Abrir</.test(p) && /href="#config">Abrir</.test(p) && /href="#filamentos">Abrir</.test(p) && /href="#insumos">Abrir</.test(p) };
+    ok('Painel: cada linha tem o botão que resolve (Feito, Na frente, Pronto, Criar ordem com o código fixo, Produzir, Pagar e Receber)', Object.values(botoes).every(Boolean), botoes);
+    const saltos = (/class="op-saltos"[\s\S]*?<\/div>/.exec(p) || [''])[0];
+    ok('Painel: no celular, três ícones no alto pulam até as listas', (saltos.match(/class="op-salto"/g) || []).length === 3 && /aria-label="Precisa de atenção: 10"/.test(saltos) && /aria-label="Contas: 4"/.test(saltos) &&
+      /aria-label="Material acabando: 4"/.test(saltos) && /opIrBloco\('op-atencao'\)/.test(saltos) && /opIrBloco\('op-contas'\)/.test(saltos) && /opIrBloco\('op-material'\)/.test(saltos), saltos.slice(0, 400));
+  });
+  await tenta(['Painel: Feito, Pagar e Receber abrem as janelas de sempre', 'Painel: Produzir faz a pergunta de sempre e cria as ordens do orçamento',
+    'Painel: Criar ordem cria a ordem da sugestão em um clique, com o código fixo, e tem Desfazer', 'Painel: a mesma sugestão criada no outro aparelho ao mesmo tempo entra uma vez só',
+    'Painel: Criar ordem com a tela parada (a ordem da sugestão já chegou do outro aparelho) pergunta antes', 'Painel: Na frente tem Desfazer'], async () => {
+    // os botões das linhas do Painel desenhado (não as funções direto)
+    ir('painel'); render();
+    const janela = (linha, rot) => { const li = $$('#main .op-lista li').find(x => x.textContent.includes(linha)), bt = li && $$('button', li).find(x => x.textContent.trim() === rot);
+      if (!bt) return 'sem o botão ' + rot; bt.click(); const t = ($('#modal h3') || {}).textContent; if (FORM) FORM.sujo = false; fecharModal(); return t; };
+    const j1 = janela('Limpar a mesa', 'Feito'), j2 = janela('Conta vencida', 'Pagar'), j3 = janela('A receber atrasada', 'Receber');
+    ok('Painel: Feito, Pagar e Receber abrem as janelas de sempre', j1 === 'Manutenção feita' && j2 === 'Pagar conta' && j3 === 'Receber conta', [j1, j2, j3]);
+    perguntas33.length = 0;
+    comProduzirOrcamento('p2-orc');
+    await pausa(300);
+    ok('Painel: Produzir faz a pergunta de sempre e cria as ordens do orçamento', perguntas33.length === 1 && /^Criar as ordens de produção do orçamento nº 7\?/.test(perguntas33[0]) && S.ordens.filter(o => o.orcamentoId === 'p2-orc').length === 1 &&
+      !opItensAtencao().some(x => x.k === 'orcamento'), perguntas33);
+    const antes = bancoTexto(), cod = codigoSugestao('p2-a'), q = sugestoesProducao().find(s => s.p.id === 'p2-a').falta;
+    opCriarDaSugestao('p2-a', q, cod);
+    await pausa(300);
+    ok('Painel: Criar ordem cria a ordem da sugestão em um clique, com o código fixo, e tem Desfazer', !$('#modal.open') && (noBanco('ordens', cod) || {}).qtd === q && noBanco('ordens', cod).status === 'fila' &&
+      avisos32().some(t => /^Ordem criada: \d+× Peça A\. Ela entrou no fim da fila\.Desfazer$/.test(t)), [cod, noBanco('ordens', cod), avisos32().slice(-1)]);
+    desfazer33();
+    await pausa(300);
+    const desfeito = bancoTexto() === antes;
+    const cod2 = codigoSugestao('p2-a');
+    outroPC([{ n: 61, ops: [{ c: 'ordens', i: cod2, t: 'novo', d: { produtoId: 'p2-a', qtd: q, status: 'fila', data: hoje(), prazo: '', clienteId: '', obs: '', criadoEm: agoraISO(), ordem: Date.now() + 9e6 } }] }]);
+    limparAvisos();
+    opCriarDaSugestao('p2-a', q, cod2);                               // este PC ainda não sabe
+    await pausa(300);
+    ok('Painel: a mesma sugestão criada no outro aparelho ao mesmo tempo entra uma vez só', desfeito && linhas32(d => /^sg-p2-a-/.test(d.id)).length === 1 &&
+      avisos32().some(t => /^Outro aparelho já tinha registrado a ordem de produção de \d+× Peça A\. Nada foi gravado em dobro/.test(t)), [desfeito, linhas32(d => d.produtoId === 'p2-a').map(d => d.id), avisos32()]);
+    put('produtos', { ...byId('produtos', 'p2-a'), estoqueMinimo: 12 });
+    await pausa(300);
+    const cod3 = codigoSugestao('p2-a'), q3 = sugestoesProducao().find(s => s.p.id === 'p2-a').falta;
+    outroPC([{ n: 62, ops: [{ c: 'ordens', i: cod3, t: 'novo', d: { produtoId: 'p2-a', qtd: 2, status: 'fila', data: hoje(), prazo: '', clienteId: '', obs: '', criadoEm: agoraISO(), ordem: Date.now() + 9e6 } }] }]);
+    await carregarTudo(true);                                         // chegou; a tela ficou parada com o botão antigo
+    opCriarDaSugestao('p2-a', q3, cod3);
+    const pg = pergunta33();
+    if (pg) resposta33('Não criar');
+    await pausa(300);
+    ok('Painel: Criar ordem com a tela parada (a ordem da sugestão já chegou do outro aparelho) pergunta antes', !!pg && pg.titulo === 'Ordem igual' && /2× Peça A/.test(pg.texto) && linhas32(d => /^sg-p2-a-/.test(d.id)).length === 2, [pg, linhas32(d => d.produtoId === 'p2-a').map(d => d.id)]);
+    const antes2 = bancoTexto();
+    opFrente('p2-o2');
+    await pausa(300);
+    const primeira = filaProducao().find(x => x.o.status === 'fila').o.id;
+    desfazer33();
+    await pausa(300);
+    ok('Painel: Na frente tem Desfazer', primeira === 'p2-o2' && bancoTexto() === antes2, primeira);
+  });
+  await tenta(['a tela mudou pelo outro aparelho: os botões do bloco e das listas esperam 1 s (e voltam a valer depois)', 'depois de uma ação deste aparelho, os botões não esperam'], async () => {
+    ir('painel'); render();
+    await pausa(1000);                                                // longe da última gravação daqui
+    const b = BASE.get('ordens/p2-o2');
+    aplicarRemoto({ tipo: 'UPSERT', colecao: 'ordens', id: 'p2-o2', dados: { ...b.d, status: 'imprimindo', inicio: agoraISO() }, versao: b.v + 50, atualizado_em: agoraISO() });
+    await pausa(450);
+    const esperando = $('#main').classList.contains('op-espera'), estilo = getComputedStyle($('#main .op-acao')).pointerEvents;
+    await pausa(900);
+    ok('a tela mudou pelo outro aparelho: os botões do bloco e das listas esperam 1 s (e voltam a valer depois)', esperando && estilo === 'none' && !$('#main').classList.contains('op-espera'), [esperando, estilo]);
+    opFrente('p2-o3');
+    await pausa(450);
+    ok('depois de uma ação deste aparelho, os botões não esperam', !$('#main').classList.contains('op-espera'), 0);
+  });
+
+  // 33b. versão 18, correções da revisão da etapa 2 (cada verificação falha no código de antes delas). Banco limpo; o "outro PC"
+  // grava direto no banco local, e o que ele fez chega aqui com carregarTudo(true) (ou nem chega: "este PC ainda não sabe").
+  for (let i = 0; i < 40 && temPendencias(); i++) await pausa(100);
+  localStorage.removeItem(DEMO_KEY); await carregarTudo(); ir('painel'); render();
+  limparAvisos();
+  put('filamentos', { id: 'r2-f1', nome: 'PLA R2', tipo: 'PLA', cor: '#cc2222', precoKg: 100, estoqueG: 5000 });
+  put('filamentos', { id: 'r2-f2', nome: 'PETG R2', tipo: 'PETG', cor: '#2222cc', precoKg: 120, estoqueG: 5000 });
+  put('produtos', { id: 'r2-vaso', nome: 'Vaso R2', materiais: [{ filamentoId: 'r2-f1', pesoG: 15 }, { filamentoId: 'r2-f2', pesoG: 5 }], horas: 1, estoque: 0, precos: { direta: 40 } });
+  put('produtos', { id: 'r2-lum', nome: 'Luminária R2', materiais: [{ filamentoId: 'r2-f1', pesoG: 25 }], horas: 1.5, estoque: 0, precos: { direta: 70 } });
+  const ordemR2 = (id, produtoId, qtd, ordem, extra = {}) => put('ordens', { id, produtoId, qtd, status: 'fila', data: hoje(), prazo: '', clienteId: '', obs: '', criadoEm: ha(120), ordem, ...extra });
+  const linhaR2 = id => DBDemo._ler().linhas['ordens/' + id];
+  const imprimindoR2 = () => Object.values(DBDemo._ler().linhas).filter(l => l.d.status === 'imprimindo' && /^r2-/.test(l.d.id)).map(l => l.d.id).sort().join();
+  const vistosR2 = () => $$('#toasts .toast').map(t => t.textContent);
+  // o que o outro PC gravou chega aqui (a tela fica como estava: uma janela ou pergunta aberta continua aberta)
+  const chegaR2 = async () => { for (let i = 0; i < 40 && temPendencias(); i++) await pausa(100); for (let i = 0; i < 5 && (await carregarTudo(true)) === false; i++) await pausa(100); };
+  // volta as ordens r2-a (imprimindo há 30 min) e r2-b (a próxima da fila) ao começo de cada cena, sem falhas
+  const cenaR2 = async () => {
+    await chegaR2();
+    S.falhas.filter(f => /^r2-/.test(f.ordemId || '')).forEach(f => rm('falhas', f.id));
+    S.ordens.filter(o => /^r2-/.test(o.id)).forEach(o => rm('ordens', o.id));
+    ordemR2('r2-a', 'r2-vaso', 4, 1, { status: 'imprimindo', inicio: ha(30) }); ordemR2('r2-b', 'r2-lum', 2, 2);
+    await pausa(300); for (let i = 0; i < 40 && temPendencias(); i++) await pausa(100);
+    limparAvisos();
+  };
+  await tenta(['impressora ocupada: o cursor começa em "Deixar as duas imprimindo" (o OK de antes): o Enter não conclui a impressão pela metade',
+    'impressora ocupada: com a pergunta aberta, o outro aparelho concluiu a atual e iniciou outra: "Concluir a atual e iniciar esta" pergunta de novo, sem pôr duas imprimindo'], async () => {
+    await cenaR2(); ordemR2('r2-c', 'r2-lum', 3, 3); await pausa();
+    opIniciar('r2-c');
+    const p = pergunta33(), foco = (document.activeElement || {}).textContent;
+    ok('impressora ocupada: o cursor começa em "Deixar as duas imprimindo" (o OK de antes): o Enter não conclui a impressão pela metade', !!p && p.titulo === 'A impressora está ocupada' && foco === 'Deixar as duas imprimindo', [p, foco]);
+    const la = linhaR2('r2-a'), lb = linhaR2('r2-b');
+    outroPC([{ n: 71, ops: [{ c: 'ordens', i: 'r2-a', t: 'mudar', se: la.v, p: [{ s: { status: 'concluido', fim: hoje(), fimEm: agoraISO() } }] }] },
+      { n: 72, ops: [{ c: 'ordens', i: 'r2-b', t: 'mudar', se: lb.v, p: [{ s: { status: 'imprimindo', inicio: agoraISO() } }] }] }]);
+    await chegaR2();                                                  // chega aqui com a pergunta aberta
+    resposta33('Concluir a atual e iniciar esta');
+    await pausa(300);
+    const p2 = pergunta33();
+    ok('impressora ocupada: com a pergunta aberta, o outro aparelho concluiu a atual e iniciou outra: "Concluir a atual e iniciar esta" pergunta de novo, sem pôr duas imprimindo',
+      !!p2 && p2.titulo === 'A impressora está ocupada' && p2.texto === '2× Luminária R2 está imprimindo.' && st33('r2-c') === 'fila' && imprimindoR2() === 'r2-b' &&
+      avisos32().some(t => /^A ordem de 4× Vaso R2 já tinha sido concluída em outro aparelho\./.test(t)), [p2, st33('r2-c'), imprimindoR2(), avisos32()]);
+    if (PERGUNTA) resposta33('Cancelar');
+  });
+  await tenta(['Concluir e iniciar a próxima: o outro aparelho recomeçou a que imprimia (não concluiu): o aviso diz que agora há duas imprimindo, com Desfazer da próxima',
+    'Concluir e iniciar a próxima: esse Desfazer volta só a próxima para a fila'], async () => {
+    await cenaR2();
+    const la = linhaR2('r2-a');
+    outroPC([{ n: 73, ops: [{ c: 'ordens', i: 'r2-a', t: 'mudar', se: la.v, p: [{ s: { inicio: agoraISO(), falhas: 1 } }] }] }]);   // Falhou "Imprimir de novo" no outro
+    opConcluirEIniciar('r2-a', 'r2-b');                               // este PC ainda não sabe
+    await pausa(400);
+    const v = vistosR2();
+    ok('Concluir e iniciar a próxima: o outro aparelho recomeçou a que imprimia (não concluiu): o aviso diz que agora há duas imprimindo, com Desfazer da próxima',
+      imprimindoR2() === 'r2-a,r2-b' && v.length === 1 && $$('#toasts .toast.com-acao').length === 1 &&
+      /^Outro aparelho mexeu na ordem de 4× Vaso R2 pouco antes, e ela continua imprimindo\. Iniciou: 2× Luminária R2\. Agora há 2 ordens imprimindo: confira\.Desfazer$/.test(v[0]), [imprimindoR2(), v]);
+    desfazer33();
+    await pausa(300);
+    ok('Concluir e iniciar a próxima: esse Desfazer volta só a próxima para a fila', st33('r2-b') === 'fila' && !noBanco('ordens', 'r2-b').inicio && st33('r2-a') === 'imprimindo' && noBanco('ordens', 'r2-a').falhas === 1,
+      [st33('r2-a'), st33('r2-b'), avisos32().slice(-1)]);
+  });
+  await tenta(['Concluir e iniciar a próxima: a conclusão valeu e o início da próxima não (o outro mexeu nela): o aviso diz isso, com Desfazer da conclusão'], async () => {
+    await cenaR2();
+    const lb = linhaR2('r2-b');
+    outroPC([{ n: 74, ops: [{ c: 'ordens', i: 'r2-b', t: 'mudar', se: lb.v, p: [{ s: { obs: 'mexida no outro PC' } }] }] }]);
+    opConcluirEIniciar('r2-a', 'r2-b');                               // este PC ainda não sabe
+    await pausa(400);
+    const v = vistosR2();
+    ok('Concluir e iniciar a próxima: a conclusão valeu e o início da próxima não (o outro mexeu nela): o aviso diz isso, com Desfazer da conclusão', st33('r2-a') === 'concluido' && st33('r2-b') === 'fila' &&
+      v.length === 1 && /^4 peças entraram no estoque de prontas\. 2× Luminária R2 não foi iniciada: outro aparelho mexeu nela pouco antes, e a tela já mostra como ela ficou\.Desfazer$/.test(v[0]), [st33('r2-a'), st33('r2-b'), v]);
+  });
+  await tenta(['Concluir e iniciar a próxima: Desfazer tocado antes da resposta, com a ordem já concluída no outro aparelho: a próxima volta para a fila e o aviso conta como ficou'], async () => {
+    await cenaR2();
+    const la = linhaR2('r2-a'), est0 = noBanco('produtos', 'r2-vaso').estoque;
+    outroPC([{ n: 75, ops: [{ c: 'ordens', i: 'r2-a', t: 'mudar', se: la.v, p: [{ s: { status: 'concluido', fim: hoje(), fimEm: agoraISO() } }] }, { c: 'produtos', i: 'r2-vaso', t: 'mudar', p: [{ a: { estoque: 4 } }] }] }]);
+    opConcluirEIniciar('r2-a', 'r2-b');                               // este PC ainda não sabe
+    desfazer33();                                                     // e desfaz antes da resposta do banco
+    await pausa(600);
+    const v = vistosR2();
+    ok('Concluir e iniciar a próxima: Desfazer tocado antes da resposta, com a ordem já concluída no outro aparelho: a próxima volta para a fila e o aviso conta como ficou',
+      st33('r2-a') === 'concluido' && st33('r2-b') === 'fila' && noBanco('produtos', 'r2-vaso').estoque === est0 + 4 && byId('ordens', 'r2-b').status === 'fila' &&
+      v.some(t => /^A ordem de 4× Vaso R2 já tinha sido concluída em outro aparelho\. 2× Luminária R2 está na fila\./.test(t)) && !v.some(t => /voltou a imprimir/.test(t)), [st33('r2-a'), st33('r2-b'), noBanco('produtos', 'r2-vaso').estoque, est0, v]);
+  });
+  await tenta(['Falhou: a saída da ordem não valeu e o aviso de sucesso já tinha saído (sem internet): o aviso diz que a falha foi registrada e que a ordem não mudou, sem Desfazer e sem mandar repetir'], async () => {
+    await cenaR2();
+    const la = linhaR2('r2-a');
+    outroPC([{ n: 76, ops: [{ c: 'ordens', i: 'r2-a', t: 'mudar', se: la.v, p: [{ s: { status: 'fila', inicio: '' } }] }] }]);    // o outro voltou para a fila
+    opFalhou('r2-a');                                                 // este PC ainda não sabe
+    $$('#op-motivos .op-chip').find(b => b.textContent === 'Entupimento').click();
+    opSaidaFalha('fila');
+    $$('#toasts .toast.com-acao').forEach(t => t._sair());            // o aviso com o Desfazer já saiu (8 s sem internet)
+    await pausa(400);
+    const v = vistosR2();
+    ok('Falhou: a saída da ordem não valeu e o aviso de sucesso já tinha saído (sem internet): o aviso diz que a falha foi registrada e que a ordem não mudou, sem Desfazer e sem mandar repetir',
+      S.falhas.filter(f => f.ordemId === 'r2-a').length === 2 && st33('r2-a') === 'fila' && v.length === 1 && !$$('#toasts .toast.com-acao').length &&
+      /^Falha registrada \(\d+ g, Entupimento\)\. A ordem de 4× Vaso R2 não mudou: outro aparelho mexeu nela pouco antes, e a tela já mostra como ela ficou\.✕?$/.test(v[0]) && !avisos32().some(t => /não foi gravada|repita/.test(t)), [st33('r2-a'), v]);
+  });
+  await tenta(['Falhou: no computador o cursor começa no primeiro motivo (não nas gramas)',
+    'falha de uma peça de duas cores: o código da falha seguinte conta os registros, como a versão 17 (que ainda pode estar aberta noutra aba)',
+    'aba antiga (versão 17) registra a mesma falha seguinte ao mesmo tempo: entra uma vez só (o filamento baixa uma vez)'], async () => {
+    await cenaR2();
+    opFalhou('r2-a');
+    const a = document.activeElement;
+    ok('Falhou: no computador o cursor começa no primeiro motivo (não nas gramas)', !!a && a === $('#op-motivos .op-chip') && a.textContent === opMotivos[0], [a && a.tagName, a && (a.name || a.textContent)]);
+    $$('#op-motivos .op-chip').find(b => b.textContent === 'Entupimento').click();
+    opSaidaFalha('continua');                                         // falha de duas cores: 2 registros, 1 falha
+    await pausa(300);
+    const o = byId('ordens', 'r2-a'), cod = codigoFalha(o, 'r2-f1', nCodigoFalha(o));
+    const v17 = Math.max(num(o.falhas), S.falhas.filter(f => f.ordemId === 'r2-a').length);   // o n que a versão 17 usa
+    ok('falha de uma peça de duas cores: o código da falha seguinte conta os registros, como a versão 17 (que ainda pode estar aberta noutra aba)', falhasDaOrdem(o) === 1 && cod === 'fa-r2-a-r2-f1-' + v17 && v17 === 2, [falhasDaOrdem(o), cod, v17]);
+    const f10 = noBanco('filamentos', 'r2-f1').estoqueG;
+    opFalhou('r2-a'); campoDoForm($('#modal form'), 'g0').value = '50'; campoDoForm($('#modal form'), 'g1').value = '0';
+    // a aba antiga registra a mesma falha (50 g de PLA R2) com o código dela e a contagem dela (registros + 1); este PC ainda não sabe
+    outroPC([{ n: 77, ops: [{ c: 'filamentos', i: 'r2-f1', t: 'mudar', p: [{ a: { estoqueG: -50 } }] }, { c: 'falhas', i: 'fa-r2-a-r2-f1-' + v17, t: 'novo', d: { data: hoje(), produtoId: 'r2-vaso', filamentoId: 'r2-f1', gramas: 50, motivo: 'Entupimento', ordemId: 'r2-a', custo: 5, criadoEm: agoraISO() } },
+      { c: 'ordens', i: 'r2-a', t: 'mudar', p: [{ s: { falhas: v17 + 1 } }] }] }]);
+    limparAvisos(); $$('#op-motivos .op-chip').find(b => b.textContent === 'Entupimento').click(); opSaidaFalha('continua');
+    await pausa(400);
+    ok('aba antiga (versão 17) registra a mesma falha seguinte ao mesmo tempo: entra uma vez só (o filamento baixa uma vez)', linhas32(d => d.ordemId === 'r2-a' && d.filamentoId === 'r2-f1').length === 2 &&
+      noBanco('filamentos', 'r2-f1').estoqueG === f10 - 50 && avisos32().some(t => /Outro aparelho já tinha registrado a falha de 50 g de PLA R2\. Nada foi gravado em dobro/.test(t)),
+      [linhas32(d => d.ordemId === 'r2-a').map(l => l.d.id), noBanco('filamentos', 'r2-f1').estoqueG, f10, avisos32()]);
+  });
+  await tenta(['fila com filamento: filamento excluído do cadastro aparece sem o visto (confira o cadastro)'], async () => {
+    await cenaR2();
+    put('produtos', { id: 'r2-sem', nome: 'Peça R2 sem filamento', materiais: [{ filamentoId: 'r2-f1', pesoG: 10 }, { filamentoId: 'r2-sumiu', pesoG: 20 }], horas: 1, estoque: 0, precos: { direta: 10 } });
+    ordemR2('r2-s', 'r2-sem', 2, 9); await pausa();
+    const h = opFios(materialDaFila().por.get('r2-s')), sumiu = h.split('<span class="op-fio').find(x => x.includes('Filamento excluído')) || '';
+    ok('fila com filamento: filamento excluído do cadastro aparece sem o visto (confira o cadastro)', /Filamento excluído/.test(sumiu) && /confira o cadastro/.test(sumiu) && !/<svg/.test(sumiu), sumiu || h);
+    excluirOrdem(byId('ordens', 'r2-s')); rm('produtos', 'r2-sem'); await pausa();
+  });
+  await tenta(['Precisa de atenção: a atrasada que está imprimindo e a primeira da fila que vence hoje têm o link para a Produção (Abrir)'], async () => {
+    await cenaR2();
+    const a = byId('ordens', 'r2-a'), b = byId('ordens', 'r2-b');
+    a.prazo = addDias(hoje(), -1); put('ordens', a); b.prazo = hoje(); put('ordens', b); await pausa();
+    const at = opItensAtencao(), la = at.find(x => x.titulo === esc(opOrdemTxt(a))), lb = at.find(x => x.titulo === esc(opOrdemTxt(b)));
+    ok('Precisa de atenção: a atrasada que está imprimindo e a primeira da fila que vence hoje têm o link para a Produção (Abrir)', !!la && !!lb && !la.b && !lb.b &&
+      /href="#producao">Abrir</.test(opLinhaLista(la)) && /href="#producao">Abrir</.test(opLinhaLista(lb)), [la, lb]);
+  });
+  await tenta(['Painel, Criar ordem com a tela parada: uma ordem igual feita à mão no outro aparelho (sem o código da sugestão) pergunta antes, como a janela de sempre',
+    'Painel, Criar ordem: a sugestão é conferida de novo e a ordem sai com a quantidade de agora',
+    'Painel, Criar ordem: o produto que já não está abaixo do mínimo não ganha outra ordem (e o aviso diz)'], async () => {
+    await cenaR2();
+    put('produtos', { id: 'r2-x', nome: 'Peça X R2', materiais: [{ filamentoId: 'r2-f1', pesoG: 5 }], horas: 0.5, estoque: 0, estoqueMinimo: 3, precos: { direta: 10 } });
+    put('produtos', { id: 'r2-y', nome: 'Peça Y R2', materiais: [{ filamentoId: 'r2-f1', pesoG: 5 }], horas: 0.5, estoque: 0, estoqueMinimo: 3, precos: { direta: 10 } });
+    put('produtos', { id: 'r2-z', nome: 'Peça Z R2', materiais: [{ filamentoId: 'r2-f1', pesoG: 5 }], horas: 0.5, estoque: 0, estoqueMinimo: 3, precos: { direta: 10 } });
+    await pausa();
+    const bt = id => (opItensAtencao().find(x => x.k === 'minimo' && x.b && x.b.id === id) || {}).b;   // o botão como estava na tela
+    const [bx, by, bz] = ['r2-x', 'r2-y', 'r2-z'].map(bt);
+    const manual = (n, id, produtoId, qtd, clienteId = '') => ({ n, ops: [{ c: 'ordens', i: id, t: 'novo', d: { produtoId, qtd, status: 'fila', data: hoje(), prazo: '', clienteId, obs: '', criadoEm: agoraISO(), ordem: Date.now() + n * 1e6 } }] });
+    put('clientes', { id: 'r2-cli', nome: 'Cliente R2' }); await pausa();
+    outroPC([manual(78, 'r2-manual-x', 'r2-x', 3), manual(79, 'r2-manual-y', 'r2-y', 2), manual(80, 'r2-manual-z', 'r2-z', 3, 'r2-cli')]);
+    await chegaR2();                                                  // as ordens do outro chegam; a tela ficou parada com os botões antigos
+    opCriarDaSugestao('r2-x', bx.qtd, bx.cod);
+    const p = pergunta33();
+    if (p) resposta33('Não criar');
+    await pausa(300);
+    ok('Painel, Criar ordem com a tela parada: uma ordem igual feita à mão no outro aparelho (sem o código da sugestão) pergunta antes, como a janela de sempre', !!p && p.titulo === 'Ordem igual' && /3× Peça X R2/.test(p.texto) &&
+      linhas32(d => d.produtoId === 'r2-x').length === 1, [p, linhas32(d => d.produtoId === 'r2-x').map(l => l.d.id + ' ' + l.d.qtd)]);
+    opCriarDaSugestao('r2-y', by.qtd, by.cod);
+    await pausa(300);
+    const ys = linhas32(d => d.produtoId === 'r2-y').map(l => l.d.qtd).sort().join();
+    ok('Painel, Criar ordem: a sugestão é conferida de novo e a ordem sai com a quantidade de agora', by.qtd === 3 && ys === '1,2' && avisos32().some(t => /^Ordem criada: 1× Peça Y R2\./.test(t)), [by.qtd, ys, avisos32().slice(-1)]);
+    limparAvisos();
+    opCriarDaSugestao('r2-z', bz.qtd, bz.cod);
+    await pausa(300);
+    ok('Painel, Criar ordem: o produto que já não está abaixo do mínimo não ganha outra ordem (e o aviso diz)', linhas32(d => d.produtoId === 'r2-z').length === 1 &&
+      avisos32().some(t => /^Peça Z R2 já não está abaixo do estoque mínimo .*Nada foi criado\./.test(t)), [linhas32(d => d.produtoId === 'r2-z').map(l => l.d.qtd), avisos32()]);
+  });
+  await tenta(['a tela mudou pelo outro aparelho só nas Contas: os botões do bloco que não mudaram nem saíram do lugar continuam valendo (só espera o que mudou)'], async () => {
+    await cenaR2();
+    criarConta({ id: 'r2-ct', tipo: 'pagar', descricao: 'Conta R2', valor: 10, vencimento: hoje() });
+    ir('painel'); render();
+    await pausa(1000);                                                // longe da última gravação daqui
+    const b = BASE.get('contas/r2-ct');
+    aplicarRemoto({ tipo: 'UPSERT', colecao: 'contas', id: 'r2-ct', dados: { ...b.d, pagoEm: hoje() }, versao: b.v + 50, atualizado_em: agoraISO() });
+    await pausa(450);
+    const so = $$('#op-imp .op-acao').find(x => /^Só concluir$/.test(x.textContent.trim())), pagar = $$('#op-contas button').filter(x => x.textContent.trim() === 'Pagar').length;
+    ok('a tela mudou pelo outro aparelho só nas Contas: os botões do bloco que não mudaram nem saíram do lugar continuam valendo (só espera o que mudou)', !!so && !so.classList.contains('op-espera') && getComputedStyle(so).pointerEvents !== 'none' && !pagar,
+      [!!so, so && getComputedStyle(so).pointerEvents, pagar]);
+  });
+  // 33c. versão 18, escolha do dono (27/11) na pergunta de pedido igual: só o pedido com cliente pergunta (a venda sem cliente,
+  // a da feira, entra direto) e o cursor fica em "Não registrar"
+  await tenta(['pedido igual: venda sem cliente (feira) repetida entra direto, sem pergunta',
+    'pedido igual: com cliente, a segunda igual pergunta e o cursor começa em "Não registrar", o último botão: o Enter não registra em dobro',
+    'pedido igual: "Não registrar" fecha a janela e avisa que nada entrou'], async () => {
+    const pid = 'feira-e2', cid = 'feira-e2-cli';
+    put('produtos', { id: pid, nome: 'Peça da feira', materiais: [], insumos: [], horas: 0, estoque: 20, estoqueMinimo: 0, precos: Object.fromEntries(S.canais.map(c => [c.id, 10])), maoObra: [] });
+    put('clientes', { id: cid, nome: 'Cliente da feira', telefone: '', email: '', cidade: '', obs: '' });
+    await pausa();
+    const vendasDe = c => S.vendas.filter(v => (v.clienteId || '') === c && itensVenda(v).some(i => i.produtoId === pid)).length;
+    const vender = async c => {
+      comNovaVenda(pid); await pausa(100);
+      if (c) { const s = $('#modal [name=clienteId]'); s.value = c; s.dispatchEvent(new Event('change', { bubbles: true })); }
+      $('#modal form').requestSubmit(); await pausa(150);
+    };
+    await vender(''); await vender('');
+    ok('pedido igual: venda sem cliente (feira) repetida entra direto, sem pergunta', vendasDe('') === 2 && !$('#modal .caixa.pergunta') && !$('#modal.open'), [vendasDe(''), !!$('#modal .caixa.pergunta')]);
+    await vender(cid); await vender(cid);
+    const p = $('#modal .caixa.pergunta'), bs = p ? $$('.pergunta-botoes .btn', p) : [];
+    ok('pedido igual: com cliente, a segunda igual pergunta e o cursor começa em "Não registrar", o último botão: o Enter não registra em dobro',
+      !!p && vendasDe(cid) === 1 && bs.length === 2 && /Registrar mais um/.test(bs[0].textContent) && /Não registrar/.test(bs[1].textContent) && document.activeElement === bs[1],
+      [vendasDe(cid), document.activeElement && document.activeElement.textContent, bs.map(b => b.textContent)]);
+    limparAvisos();
+    if (p) responder(1);                                             // Não registrar
+    await pausa(100);
+    ok('pedido igual: "Não registrar" fecha a janela e avisa que nada entrou', !!p && !$('#modal.open') && vendasDe(cid) === 1 && avisos32().some(t => /^Nada foi registrado\./.test(t)), [vendasDe(cid), avisos32()]);
+  });
+  window.confirm = confirmarDeVerdade;
   await carregarTudo();
 
   // 29. persistência

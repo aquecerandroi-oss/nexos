@@ -592,7 +592,7 @@ async function descarregar() {
     REV++; pedirRender();
     // o grupo de que ele dependia foi recusado pelo banco e essa recusa já foi avisada (ex.: Desfazer clicado antes da
     // resposta de uma ação que o outro aparelho já tinha feito): um segundo aviso só confundiria
-    avisarRecusados(perdidos.filter(g => !g.semAviso && !dependiaDeRecusaAvisada(g)).map(() => ({ motivo: 'depende' })));
+    avisarRecusados(perdidos.filter(g => !g.semAviso && !dependiaDeRecusaAvisada(g)).map(g => ({ motivo: 'depende', g })));
   }
   const lote = [], chaves = new Set();
   let nOps = 0;
@@ -732,7 +732,7 @@ function aplicarResposta(lote, res) {
       const col = alvo.slice(0, j), op = g.ops.get(alvo);
       // "Feito" de manutenção: o grupo levava também o registro (e o custo) da manutenção, que não entrou
       const manut = col === 'manutItens' && [...g.ops.values()].some(o => o.c === 'manutHist' && o.t === 'novo');
-      recusados.push({ motivo: motivo.split(':')[0], col, manut, d: vistaDe(alvo) || vistoAntes || ULTIMO_VISTO.get(alvo) || (op && op.d) || (BASE.get(alvo) || {}).d });
+      recusados.push({ motivo: motivo.split(':')[0], col, manut, g, d: vistaDe(alvo) || vistoAntes || ULTIMO_VISTO.get(alvo) || (op && op.d) || (BASE.get(alvo) || {}).d });
     }
   });
   if (semResposta.length) { semResposta.forEach(g => { g.incerto = true; }); FILA.unshift(...semResposta); }
@@ -758,10 +758,21 @@ const dependiaDeRecusaAvisada = g => [...g.ops.values()].every(op => {
   const r = op.seGrupo !== undefined ? RESULTADOS.get(op.seGrupo) : null;
   return !!r && !r.ok && !r.semAviso;
 });
-/* Aviso do que não foi gravado porque outro aparelho mexeu antes. */
+/* Aviso do que não foi gravado porque outro aparelho mexeu antes. Ação de mais de uma gravação (ex.: Falhou muda a ordem e
+   registra a falha): g.explicar(recusas, naTela) conta o que entrou e o que não entrou e devolve true (o aviso de sempre não
+   aparece); recusas: as gravações dela recusadas agora ([{ motivo, g }]); naTela: o aviso dela (com o Desfazer) ainda estava à
+   vista. */
 function avisarRecusados(lista) {
   // o aviso de sucesso (e o Desfazer) de uma gravação recusada some: a tela já mostra como ficou
-  $$('#toasts .toast').forEach(t => { if ((t._grupos || []).some(g => { const r = RESULTADOS.get(g.n); return r && !r.ok; })) t._sair(); });
+  const naTela = new Set();
+  $$('#toasts .toast').forEach(t => { if ((t._grupos || []).some(g => { const r = RESULTADOS.get(g.n); return r && !r.ok; })) { t._grupos.forEach(g => naTela.add(g)); t._sair(); } });
+  const porAcao = new Map();
+  lista.forEach(x => { const fn = x.g && x.g.explicar; if (typeof fn === 'function') porAcao.set(fn, [...(porAcao.get(fn) || []), x]); });
+  porAcao.forEach((xs, fn) => {
+    let explicou = false;
+    try { explicou = fn(xs, xs.some(x => naTela.has(x.g))) === true; } catch (e) { console.error(e); }
+    if (explicou) lista = lista.filter(x => !xs.includes(x));
+  });
   if (!lista.length) return;
   // "Feito" num item que o outro aparelho excluiu: a manutenção e o custo dela ficaram fora, e isso tem aviso próprio
   const manutFora = x => `Outro aparelho excluiu ${descricaoRegistro(x.col, x.d)}. A manutenção (e o custo) não foi gravada: se ela foi feita, registre em “Registrar manutenção avulsa”.`;
@@ -966,7 +977,7 @@ document.addEventListener('visibilitychange', () => {
 /* ---------- Versão nova publicada ----------
    Uma aba aberta continua na versão antiga até ser recarregada. Ao voltar para a aba (no máximo a cada 5 minutos) e a
    cada 30 minutos, confere o número da versão publicada e, se houver uma mais nova, oferece atualizar. */
-const VERSAO = 17;
+const VERSAO = 18;
 let avisouVersao = false, conferidoEm = 0;
 async function conferirVersao(forcar = false) {
   if (DEMO || avisouVersao || !$('#main') || (!forcar && Date.now() - conferidoEm < 5 * 60000)) return;
@@ -1249,13 +1260,16 @@ function toast(msg, tipo = '', acao) {
 }
 /* Os grupos de uma ação ainda estão como ela gravou? Sem resposta do banco: sim (o que vier depois espera por eles).
    Recusados: não. Gravados: só se nenhum movimento deles (ordem, pedido, conta...) mudou depois, aqui ou em outro aparelho.
-   O estoque não conta: ele é somado no banco, e desfazer devolve só o que a ação somou. */
+   O estoque não conta: ele é somado no banco, e desfazer devolve só o que a ação somou. Movimento gravado por mais de um grupo
+   da mesma ação (ex.: Falhou muda a ordem e depois a contagem de falhas dela) é conferido no último deles. */
 function gravacaoValeAinda(grupos) {
+  const ultimo = new Map();
+  grupos.forEach(g => g.ops.forEach((op, k) => { if (!ultimo.has(k) || ultimo.get(k).n < g.n) ultimo.set(k, g); }));
   return grupos.every(g => {
     const r = RESULTADOS.get(g.n);
     if (!r) return !g.ops.size || FILA.includes(g) || VOO.includes(g);
     if (!r.ok) return false;
-    return [...g.ops.keys()].filter(k => COM_VERSAO.has(k.slice(0, k.indexOf('/')))).every(k => {
+    return [...g.ops.keys()].filter(k => COM_VERSAO.has(k.slice(0, k.indexOf('/'))) && ultimo.get(k) === g).every(k => {
       const v = r.versoes.get(k), b = BASE.get(k);
       return v === undefined || (v === -1 ? !b : !!b && b.v === v);
     });
@@ -1263,8 +1277,12 @@ function gravacaoValeAinda(grupos) {
 }
 function usarAcaoDoAviso(acao) {
   if (!gravacaoValeAinda(acao.grupos || [])) { render(); toast(acao.mudou || 'Isto já mudou depois. Nada foi desfeito.', 'bad'); return; }
-  novoGrupo();
+  const marca = marcaDesfazer(), antes = new Set($$('#toasts .toast'));
   acao.fn();
+  // o aviso do que foi desfeito acompanha todas as gravações do desfazer: se uma delas não valer, ele some (a tela já mostra
+  // como ficou)
+  const gs = FILA.filter(g => g.n > marca && g.ops.size);
+  $$('#toasts .toast').forEach(t => { if (!antes.has(t) && !t.classList.contains('com-acao') && (t._grupos || []).length) t._grupos = gs; });
 }
 /* Desfazer por 8 s: marca = marcaDesfazer() antes da ação e, depois dela, avisoDesfazer(texto, marca, fn). Os grupos gravados
    depois da marca são os da ação; fn desfaz com as funções de sempre (reabrirOrdem, excluirOrdem...) e confere o estado. */
@@ -1308,8 +1326,8 @@ function perguntar(titulo, texto, botoes) {
 function responder(i, e) {
   const p = PERGUNTA;
   if (!p) return;
-  // Enter (ou espaço) apertado logo depois de a pergunta aparecer, sem tempo de ler, não responde: dois Enter seguidos no
-  // Salvar de uma ordem igual não criam a segunda (quem leu aperta de novo)
+  // Enter (ou espaço) apertado logo depois de a pergunta aparecer, sem tempo de ler, não responde: o segundo de dois Enter
+  // seguidos no Salvar não fecha a pergunta que a pessoa nem viu (quem leu aperta de novo)
   if (i >= 0 && e && e.isTrusted && e.detail === 0 && Date.now() - (p.desde || 0) < 500) return;
   PERGUNTA = null;
   const b = i >= 0 ? p.botoes[i] : null;
